@@ -1,0 +1,54 @@
+services:
+  db-e2e:
+    profiles: [test]
+    image: postgres:17.6
+    environment:
+      POSTGRES_DB: testchatty
+      POSTGRES_USER: testchatty
+      POSTGRES_PASSWORD: synthetic-test-password
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U testchatty -d testchatty]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  backend-e2e:
+    profiles: [test]
+    build:
+      context: backend
+      target: demo
+    environment:
+      DATABASE_URL: jdbc:postgresql://db-e2e:5432/testchatty
+      DATABASE_USER: testchatty
+      DATABASE_PASSWORD: synthetic-test-password
+      MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      BOOTSTRAP_TOKEN: synthetic-bootstrap-token-for-tests-only
+      CHATTY_MODE: demo
+      COOKIE_SECURE: "false"
+    depends_on:
+      db-e2e:
+        condition: service_healthy
+  web-e2e:
+    profiles: [test]
+    build: frontend
+    environment:
+      SITE_ADDRESS: :80
+      BACKEND_UPSTREAM: backend-e2e:8080
+    depends_on:
+      - backend-e2e
+  e2e:
+    profiles: [test]
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    working_dir: /workspace
+    environment:
+      PLAYWRIGHT_BASE_URL: http://web-e2e
+      CI: "true"
+    volumes:
+      - ./frontend:/workspace
+      - e2e-deps:/workspace/node_modules
+    depends_on:
+      - web-e2e
+    command: sh -c "npm ci && npm run e2e"
+volumes:
+  e2e-deps:

@@ -1,0 +1,37 @@
+server:
+  port: 8080
+  shutdown: graceful
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        http-only: true
+        same-site: strict
+        secure: ${COOKIE_SECURE:true}
+spring:
+  application:
+    name: chatty-x
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/chattyx}
+    username: ${DATABASE_USER:chattyx}
+    password: ${DATABASE_PASSWORD}
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+  threads:
+    virtual:
+      enabled: true
+chatty:
+  master-key: ${MASTER_KEY}
+  bootstrap-token: ${BOOTSTRAP_TOKEN}
+  mode: ${CHATTY_MODE:production}
+  data-dir: ${DATA_DIR:./data}
+  telegram-api-id: ${TELEGRAM_API_ID:0}
+  telegram-api-hash: ${TELEGRAM_API_HASH:}
+  workers-enabled: ${WORKERS_ENABLED:true}
+logging:
+  level:
+    root: INFO
+    org.springframework.web: WARN
+    org.springframework.security: WARN

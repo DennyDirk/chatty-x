@@ -1,0 +1,10 @@
+[Unit]
+Description=Chatty-X encrypted backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/chatty-x
+ExecStart=/usr/bin/node /opt/chatty-x/infra/backup.mjs create
+UMask=0077

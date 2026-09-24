@@ -1,0 +1,9 @@
+.git
+.env*
+.idea
+data
+secrets
+backups
+**/node_modules
+**/target
+**/dist

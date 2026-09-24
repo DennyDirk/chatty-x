@@ -1,0 +1,10 @@
+BEGIN;
+UPDATE app_settings SET body=jsonb_set(body,'{enabled}','false'),version=version+1 WHERE scope='global';
+UPDATE connection SET enabled=false,status='DISCONNECTED';
+UPDATE conversation SET mode='PAUSED',status='ATTENTION',needs_attention='RESTORE_REVIEW',version=version+1;
+UPDATE outbound SET status='UNKNOWN',reason='RESTORED_UNCONFIRMED' WHERE status IN ('SENDING','SUBMITTED');
+UPDATE outbound SET status='CANCELLED',reason='RESTORE_REVIEW' WHERE status IN ('READY','DRAFT','STALE');
+DELETE FROM automation_job;
+DELETE FROM memory_job;
+UPDATE owner_account SET session_version=session_version+1;
+COMMIT;
