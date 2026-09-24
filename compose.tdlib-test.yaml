@@ -1,0 +1,22 @@
+name: chatty-x-tdlib-test
+services:
+  tdlib-check:
+    image: chatty-x-tdlib:ea97bcdd
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.tdlib
+    network_mode: none
+    read_only: true
+    user: "10001:10001"
+    working_dir: /tmp
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command:
+      - java
+      - --enable-native-access=ALL-UNNAMED
+      - -Djava.library.path=/opt/tdlib/bin
+      - -cp
+      - /opt/tdlib/bin:/opt/tdlib/smoke
+      - app.chattyx.smoke.TdlibSmoke

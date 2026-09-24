@@ -8,6 +8,8 @@ RUN cmake -S /src/td -B /src/td/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLA
 RUN cmake -S /src/td -B /src/td/build -DTD_ENABLE_JNI=ON -DJAVA_HOME=${JAVA_HOME} && cmake --build /src/td/build --target install -j 2
 RUN cmake -S /src/td/example/java -B /src/java-build -DTD_JSON_JAVA=ON -DTd_DIR=/src/td/example/java/td/lib/cmake/Td -DCMAKE_INSTALL_PREFIX=/opt/tdlib -DJAVA_HOME=${JAVA_HOME} && cmake --build /src/java-build --target install -j 2
 RUN printf '%s\n' ${TDLIB_COMMIT} > /opt/tdlib/REVISION
+COPY infra/TdlibSmoke.java /src/TdlibSmoke.java
+RUN mkdir -p /opt/tdlib/smoke && javac -d /opt/tdlib/smoke /src/TdlibSmoke.java
 FROM eclipse-temurin:25-jre
 RUN apt-get update && apt-get install -y --no-install-recommends libssl3t64 zlib1g ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=native /opt/tdlib /opt/tdlib
