@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Send, ShieldCheck, Sparkles, KeyRound, ArrowUpRight } from "lucide-react";
-import { api, errorText } from "../lib/api";
+import { api, ApiError, errorText } from "../lib/api";
 import { type Connection, type Usage, statuses } from "../lib/types";
 import { SettingsEditor } from "./SettingsEditor";
 import { Button } from "./ui/button";
@@ -61,7 +61,9 @@ export function Accounts() {
                 type="checkbox"
                 checked={c.enabled}
                 onChange={(e) =>
-                  void action(`/connections/${c.id}/enabled`, "PUT", { enabled: e.target.checked })
+                  void action(`/connections/${c.id}/enabled`, "PUT", {
+                    enabled: e.target.checked,
+                  })
                 }
               />
               Разрешить автоматизацию аккаунта
@@ -146,16 +148,22 @@ export function Accounts() {
     </section>
   );
 }
-function Authorization({ id, onClose }: { id: string; onClose: () => void }) {
+export function Authorization({ id, onClose }: { id: string; onClose: () => void }) {
   const cache = useQueryClient();
   const state = useQuery({
     queryKey: ["data", "auth", id],
     queryFn: () => api<{ step: string; fields: Record<string, string> }>(`/connections/${id}/authorization`),
     refetchInterval: 1500,
+    gcTime: 0,
   });
   const [value, setValue] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const step = state.data?.step ?? "INITIALIZING";
+  useEffect(() => {
+    setValue("");
+    setError("");
+  }, [id, step]);
   async function submit(body: unknown) {
     setBusy(true);
     setError("");
@@ -165,11 +173,37 @@ function Authorization({ id, onClose }: { id: string; onClose: () => void }) {
       await cache.invalidateQueries({ queryKey: ["data"] });
     } catch (e) {
       setError(errorText(e));
+      await state.refetch();
     } finally {
+      setValue("");
       setBusy(false);
     }
   }
-  const step = state.data?.step ?? "DISCONNECTED";
+  const methodBusy = busy || state.isPending || ["INITIALIZING", "CLOSING", "READY"].includes(step);
+  const qrLink =
+    step === "QR" && state.data?.fields.link?.startsWith("tg://login?token=")
+      ? state.data.fields.link
+      : undefined;
+  const stateError = state.data?.fields.code;
+  const visibleError =
+    error ||
+    (state.isError ? errorText(state.error) : "") ||
+    (step === "ERROR" ? errorText(new ApiError(stateError ?? "TELEGRAM_AUTH_REQUEST_FAILED", 502)) : "");
+  const labels: Record<string, string> = {
+    DISCONNECTED: "Выберите способ входа",
+    INITIALIZING: "Подключаемся к Telegram…",
+    CLOSING: "Завершаем предыдущий вход…",
+    QR_PENDING: "Получаем QR-код…",
+    QR: "Откройте Telegram → Настройки → Устройства → Подключить устройство",
+    PHONE: "Введите номер телефона",
+    CODE: "Введите код подтверждения",
+    PASSWORD: "Нужен пароль двухэтапной проверки",
+    EMAIL: "Подтвердите email",
+    EMAIL_CODE: "Введите код из письма",
+    READY: "Аккаунт подключён",
+    ERROR: "Не удалось завершить вход",
+    UNSUPPORTED_STEP: "Нужно дополнительное действие",
+  };
   return (
     <div className="modal-backdrop">
       <section className="modal" role="dialog" aria-modal="true" aria-label="Подключение Telegram">
@@ -183,21 +217,23 @@ function Authorization({ id, onClose }: { id: string; onClose: () => void }) {
           Подтвердите вход в своём Telegram. Коды и пароль используются только для авторизации.
         </p>
         <div className="button-row">
-          <Button variant="secondary" disabled={busy} onClick={() => void submit({ method: "qr" })}>
+          <Button variant="secondary" disabled={methodBusy} onClick={() => void submit({ method: "qr" })}>
             Вход по QR
           </Button>
-          <Button variant="secondary" disabled={busy} onClick={() => void submit({ method: "phone" })}>
+          <Button variant="secondary" disabled={methodBusy} onClick={() => void submit({ method: "phone" })}>
             По номеру
           </Button>
         </div>
-        <p className="badge">{step === "READY" ? "Аккаунт подключён" : step}</p>
-        {state.data?.fields.link && (
+        <p className="badge" role="status">
+          {labels[step] ?? "Ожидаем Telegram…"}
+        </p>
+        {qrLink && (
           <div className="qr-code">
-            <QRCodeSVG value={state.data.fields.link} size={224} title="QR для подключения Telegram" />
+            <QRCodeSVG value={qrLink} size={224} title="QR для подключения Telegram" />
           </div>
         )}
-        {state.data?.fields.link && (
-          <a className="auth-link" href={state.data.fields.link}>
+        {qrLink && (
+          <a className="auth-link" href={qrLink}>
             Открыть подтверждение в Telegram <ArrowUpRight size={15} />
           </a>
         )}
@@ -223,21 +259,22 @@ function Authorization({ id, onClose }: { id: string; onClose: () => void }) {
               <input
                 type={step === "PASSWORD" ? "password" : step === "EMAIL" ? "email" : "text"}
                 autoComplete="off"
+                disabled={busy}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 required
               />
             </label>
-            <Button disabled={busy}>Продолжить</Button>
+            <Button disabled={busy || !value.trim()}>Продолжить</Button>
           </form>
         )}
         {step === "READY" && <Button onClick={onClose}>Готово</Button>}
         {step === "UNSUPPORTED_STEP" && (
           <p className="error">Этот шаг авторизации пока не поддержан интерфейсом.</p>
         )}
-        {error && (
+        {visibleError && (
           <p className="error" role="alert">
-            {error}
+            {visibleError}
           </p>
         )}
       </section>
@@ -279,7 +316,9 @@ export function Profile() {
               .then(() => {
                 setKey("");
                 setNotice("Ключ сохранён");
-                return cache.invalidateQueries({ queryKey: ["data", "credentials"] });
+                return cache.invalidateQueries({
+                  queryKey: ["data", "credentials"],
+                });
               })
               .catch((e) => setNotice(errorText(e)));
           }}
@@ -303,7 +342,11 @@ export function Profile() {
 }
 export function Playground() {
   const [text, setText] = useState("Привет!\nЯ сегодня наконец закрыл тот проект"),
-    [result, setResult] = useState<{ action: string; text: string; reason: string } | null>(null),
+    [result, setResult] = useState<{
+      action: string;
+      text: string;
+      reason: string;
+    } | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   return (
@@ -370,13 +413,17 @@ export function Playground() {
   );
 }
 export function Overview() {
-  const usage = useQuery({ queryKey: ["data", "usage"], queryFn: () => api<Usage>("/usage") });
+  const usage = useQuery({
+    queryKey: ["data", "usage"],
+    queryFn: () => api<Usage>("/usage"),
+  });
   const diagnostics = useQuery({
     queryKey: ["data", "diagnostics"],
     queryFn: () =>
-      api<{ uncertainDelivery: { id: string; status: string; reason: string }[]; jobs: unknown[] }>(
-        "/diagnostics",
-      ),
+      api<{
+        uncertainDelivery: { id: string; status: string; reason: string }[];
+        jobs: unknown[];
+      }>("/diagnostics"),
   });
   return (
     <section className="page">

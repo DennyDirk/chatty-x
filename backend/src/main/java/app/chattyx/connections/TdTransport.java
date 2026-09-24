@@ -123,4 +123,10 @@ final class TdTransport implements AutoCloseable {
     ordered.values().forEach(ExecutorService::shutdownNow);
     requests.values().forEach(f -> f.cancel(true));
   }
+
+  void release(int id) {
+    listeners.remove(id);
+    var executor = ordered.remove(id);
+    if (executor != null) executor.shutdown();
+  }
 }

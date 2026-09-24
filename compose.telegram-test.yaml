@@ -1,0 +1,49 @@
+name: chatty-x-telegram-test
+services:
+  db:
+    image: postgres:17.6
+    environment:
+      POSTGRES_DB: chattyx
+      POSTGRES_USER: chattyx
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.telegram-test}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U chattyx -d chattyx]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  backend:
+    build:
+      context: backend
+      target: production
+    environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/chattyx
+      DATABASE_USER: chattyx
+      DATABASE_PASSWORD: ${DB_PASSWORD}
+      MASTER_KEY: ${MASTER_KEY:?Set MASTER_KEY in .env.telegram-test}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set BOOTSTRAP_TOKEN in .env.telegram-test}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?Set TELEGRAM_API_ID in .env.telegram-test}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?Set TELEGRAM_API_HASH in .env.telegram-test}
+      CHATTY_MODE: production
+      COOKIE_SECURE: "false"
+      WORKERS_ENABLED: "false"
+      DATA_DIR: /data
+    volumes:
+      - application:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    stop_grace_period: 60s
+  web:
+    build: frontend
+    environment:
+      SITE_ADDRESS: ":80"
+      BACKEND_UPSTREAM: backend:8080
+    ports:
+      - "127.0.0.1:8089:80"
+    depends_on:
+      - backend
+volumes:
+  postgres:
+  application:

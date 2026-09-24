@@ -11,7 +11,9 @@ export async function api<T>(path: string, method = "GET", body?: unknown): Prom
   const headers: Record<string, string> = {};
   if (method !== "GET") {
     if (!csrf) {
-      const response = await fetch("/api/v1/identity/csrf", { credentials: "same-origin" });
+      const response = await fetch("/api/v1/identity/csrf", {
+        credentials: "same-origin",
+      });
       if (!response.ok) throw new ApiError("CONNECTION_FAILED", response.status);
       csrf = await response.json();
     }
@@ -40,6 +42,14 @@ const errors: Record<string, string> = {
   BUDGET_EXHAUSTED: "Лимит расходов достигнут. Ручные ответы доступны.",
   MODEL_KEY_REQUIRED: "Добавьте API-ключ в общих настройках.",
   TELEGRAM_APP_CREDENTIALS_REQUIRED: "Укажите TELEGRAM_API_ID и TELEGRAM_API_HASH на сервере.",
+  TELEGRAM_AUTH_IN_PROGRESS: "Предыдущий вход ещё завершается. Дождитесь следующего шага.",
+  TELEGRAM_AUTH_STEP_CHANGED: "Этап входа изменился. Введите данные для текущего шага.",
+  TELEGRAM_AUTH_REQUEST_FAILED:
+    "Telegram не подтвердил запрос. Проверьте соединение и выберите способ входа снова.",
+  TELEGRAM_INITIALIZATION_FAILED: "Не удалось подготовить сессию Telegram. Попробуйте подключиться снова.",
+  TELEGRAM_REQUEST_REJECTED:
+    "Telegram отклонил данные. Проверьте номер, актуальный код или пароль и повторите ввод.",
+  INVALID_AUTH_VALUE: "Введите данные для текущего шага входа.",
   TDLIB_NATIVE_UNAVAILABLE: "Нужна production-сборка с TDLib. Тестовый режим не подключает Telegram.",
   CONTEXT_CHANGED: "Переписка изменилась. Обновите данные и проверьте действие.",
   SETTINGS_CHANGED: "Настройки изменились в другой вкладке. Обновите страницу.",
