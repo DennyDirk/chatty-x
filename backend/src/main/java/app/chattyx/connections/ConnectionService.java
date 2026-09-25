@@ -2,9 +2,7 @@ package app.chattyx.connections;
 
 import app.chattyx.conversations.ConversationService;
 import app.chattyx.shared.*;
-import java.time.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -15,23 +13,22 @@ public class ConnectionService {
   private final ChannelRegistry channels;
   private final ConversationService chats;
   private final Events events;
-  private final Clock clock;
+  private final HistoryImportService history;
   private final TransactionTemplate tx;
-  private final Set<UUID> imports = ConcurrentHashMap.newKeySet();
 
   public ConnectionService(
     Db db,
     ChannelRegistry channels,
     ConversationService chats,
     Events events,
-    Clock clock,
+    HistoryImportService history,
     org.springframework.transaction.PlatformTransactionManager tm
   ) {
     this.db = db;
     this.channels = channels;
     this.chats = chats;
     this.events = events;
-    this.clock = clock;
+    this.history = history;
     tx = new TransactionTemplate(tm);
   }
 
@@ -61,7 +58,10 @@ public class ConnectionService {
     var adapter = channels.forConnection(id);
     return adapter instanceof TelegramAdapter t
       ? t.authorization(id)
-      : new MessagingAdapter.Authorization(db.one("SELECT status FROM connection WHERE id=?",id).get("status").toString(), Map.of("adapter",adapter.name()));
+      : new MessagingAdapter.Authorization(
+          db.one("SELECT status FROM connection WHERE id=?", id).get("status").toString(),
+          Map.of("adapter", adapter.name())
+        );
   }
 
   public void disconnect(UUID id, boolean revoke) {
@@ -70,8 +70,10 @@ public class ConnectionService {
         "SELECT id FROM conversation WHERE connection_id=? FOR UPDATE",
         UUID.class,
         id
-      ))
+      )) {
+        history.cancel(chat);
         chats.pause(chat, "ACCOUNT_DISCONNECTED");
+      }
       db.jdbc.update("UPDATE connection SET enabled=false WHERE id=?", id);
     });
     channels.forConnection(id).disconnect(id, revoke);
@@ -103,74 +105,18 @@ public class ConnectionService {
         db.jdbc.queryForObject("SELECT count(*) FROM conversation WHERE selected", Integer.class) >= 100
       ) throw new ApiException(409, "CHAT_LIMIT");
       chats.pause(id, "OWNER_PAUSED");
-      db.jdbc.update("UPDATE conversation SET selected=?,import_cancelled=false WHERE id=?", selected, id);
+      db.jdbc.update("UPDATE conversation SET selected=? WHERE id=?", selected, id);
+      if (!selected) history.cancel(id);
     });
     if (selected) importHistory(id);
     events.changed();
   }
 
   public void cancelImport(UUID id) {
-    db.jdbc.update("UPDATE conversation SET import_cancelled=true WHERE id=?", id);
+    history.cancel(id);
   }
 
   public void importHistory(UUID id) {
-    if (!Boolean.TRUE.equals(chats.get(id).get("selected"))) throw new ApiException(409, "CHAT_NOT_SELECTED");
-    db.jdbc.update("UPDATE conversation SET import_cancelled=false WHERE id=?", id);
-    if (!imports.add(id)) return;
-    Thread.ofVirtual()
-      .name("history-import")
-      .start(() -> {
-        try {
-          var row = chats.get(id);
-          UUID connection = UUID.fromString(row.get("connectionId").toString());
-          String external = row.get("externalId").toString();
-          var adapter = channels.forConnection(connection);
-          String cursor = null;
-          int count = 0;
-          Instant cutoff = clock.instant().minus(Duration.ofDays(30));
-          db.jdbc.update(
-            "UPDATE conversation SET status='IMPORTING',imported=false,import_count=0 WHERE id=?",
-            id
-          );
-          while (count < 1000) {
-            var current = chats.get(id);
-            if (
-              Boolean.TRUE.equals(current.get("importCancelled")) ||
-              !Boolean.TRUE.equals(current.get("selected"))
-            ) break;
-            var page = adapter.fetchHistory(connection, external, cursor, Math.min(100, 1000 - count));
-            if (page.messages().isEmpty()) break;
-            boolean older = false;
-            for (var message : page.messages()) {
-              if (message.time().isBefore(cutoff)) {
-                older = true;
-                break;
-              }
-              chats.receive(message);
-              count++;
-            }
-            db.jdbc.update("UPDATE conversation SET import_count=? WHERE id=?", count, id);
-            events.changed();
-            if (older || page.nextCursor() == null || page.nextCursor().equals(cursor)) break;
-            cursor = page.nextCursor();
-          }
-          db.jdbc.update(
-            "UPDATE conversation SET imported=selected AND NOT import_cancelled,status='PAUSED' WHERE id=?",
-            id
-          );
-          db.jdbc.update(
-            "INSERT INTO memory_job(conversation_id) VALUES (?) ON CONFLICT(conversation_id) DO UPDATE SET revision=memory_job.revision+1,due_at=now()",
-            id
-          );
-        } catch (Exception e) {
-          db.jdbc.update(
-            "UPDATE conversation SET status='ATTENTION',needs_attention='IMPORT_FAILED' WHERE id=?",
-            id
-          );
-        } finally {
-          imports.remove(id);
-          events.changed();
-        }
-      });
+    history.start(id);
   }
 }

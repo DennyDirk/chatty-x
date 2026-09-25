@@ -16,6 +16,8 @@ export interface Conversation {
   version: number;
   imported: boolean;
   importCount: number;
+  importRunId?: string | null;
+  importCancelled?: boolean;
   needsAttention: string | null;
   summary: string;
   accountName: string;

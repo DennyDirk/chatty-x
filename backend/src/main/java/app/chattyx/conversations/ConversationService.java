@@ -114,8 +114,18 @@ public class ConversationService {
       message.ephemeral(),
       message.replyTo()
     );
-    if (inserted == 0) return;
-    if (message.media() != null) {
+    if (inserted == 0) {
+      // A live event can arrive after its history page. Promote it only inside this
+      // import window; replaying older history must never reopen an old question.
+      if (message.historical() || chat.get("importRunId") == null || chat.get("importStartedAt") == null ||
+          message.time().isBefore(Instant.parse(chat.get("importStartedAt").toString()))) return;
+      int promoted = db.jdbc.update(
+          "UPDATE message SET historical=false,handled=? WHERE conversation_id=? AND external_id=? AND historical AND NOT deleted",
+          message.outgoing(), id, message.messageId());
+      if (promoted == 0) return;
+      db.jdbc.update("UPDATE attachment SET status='PENDING' WHERE status='HISTORICAL' AND message_id IN (SELECT id FROM message WHERE conversation_id=? AND external_id=?)", id, message.messageId());
+    }
+    if (inserted > 0 && message.media() != null) {
       var a = message.media();
       db.jdbc.update(
         "INSERT INTO attachment(id,message_id,external_file_id,kind,mime_type,size_bytes,duration_seconds,status) VALUES (?,?,?,?,?,?,?,?)",

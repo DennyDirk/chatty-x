@@ -38,6 +38,15 @@ test('owner setup, account selection, one reply per burst, manual takeover and m
   const chat=chats.find((c:{externalId:string})=>c.externalId==='1001');
   await mutate(page.request,`/conversations/${chat.id}/selection`,'PUT',{selected:true});
   await expect.poll(async()=> (await(await page.request.get(`/api/v1/conversations/${chat.id}`)).json()).imported).toBe(true);
+  await page.reload();
+  await page.getByRole('button',{name:/Аня · тестовый чат/}).click();
+  await expect(page.getByText(/История загружена:/)).toBeVisible();
+  const reimport = page.waitForResponse(response => response.url().endsWith(`/conversations/${chat.id}/import`) && response.request().method() === 'POST');
+  await page.getByRole('button',{name:'Загрузить заново'}).click();
+  expect((await reimport).ok()).toBe(true);
+  await expect.poll(async()=> (await(await page.request.get(`/api/v1/conversations/${chat.id}`)).json()).imported).toBe(true);
+  expect((await(await page.request.get(`/api/v1/conversations/${chat.id}`)).json()).mode).toBe('PAUSED');
+  expect((await(await page.request.get(`/api/v1/conversations/${chat.id}/messages`)).json())).toHaveLength(0);
   const settings=await(await page.request.get('/api/v1/settings')).json();
   await mutate(page.request,'/settings','PUT',{version:settings.version,body:{...settings.body,enabled:true}});
   await mutate(page.request,`/conversations/${chat.id}/control/resume`,'POST');

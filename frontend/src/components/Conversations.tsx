@@ -17,6 +17,7 @@ import {
 import { api, errorText } from "../lib/api";
 import { type Conversation, type Message, type Outbound, type Fact, statuses } from "../lib/types";
 import { Button } from "./ui/button";
+import { HistoryImportNotice } from "./HistoryImportNotice";
 import { SettingsEditor } from "./SettingsEditor";
 
 export function Conversations() {
@@ -257,19 +258,10 @@ function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void }) {
             </Button>
           </div>
         )}
-        {chat.status === "IMPORTING" && (
-          <div className="notice">
-            Загружаем историю: {chat.importCount}
-            <Button
-              size="small"
-              variant="ghost"
-              onClick={() => act(`/conversations/${chat.id}/import`, "DELETE")}
-            >
-              Отменить
-            </Button>
-          </div>
-        )}
-        {chat.needsAttention && chat.status === "ATTENTION" && (
+        <HistoryImportNotice chat={chat} busy={busy}
+          onStart={() => void act(`/conversations/${chat.id}/import`)}
+          onCancel={() => void act(`/conversations/${chat.id}/import`, "DELETE")} />
+        {chat.needsAttention && chat.status === "ATTENTION" && !["IMPORT_FAILED", "IMPORT_INTERRUPTED"].includes(chat.needsAttention) && (
           <div className="notice warning">
             <AlertCircle size={18} />
             <span>
