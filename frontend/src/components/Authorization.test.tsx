@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { api, ApiError } from "../lib/api";
-import { Authorization } from "./Pages";
+import { Authorization } from "./Authorization";
 
 vi.mock("../lib/api", async (original) => ({
   ...(await original<typeof import("../lib/api")>()),

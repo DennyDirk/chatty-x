@@ -42,6 +42,8 @@ const errors: Record<string, string> = {
   BUDGET_EXHAUSTED: "Лимит расходов достигнут. Ручные ответы доступны.",
   MODEL_KEY_REQUIRED: "Добавьте API-ключ в общих настройках.",
   TELEGRAM_APP_CREDENTIALS_REQUIRED: "Укажите TELEGRAM_API_ID и TELEGRAM_API_HASH на сервере.",
+  TELEGRAM_NOT_CONNECTED:
+    "Telegram не подключён. Откройте подключение и завершите вход, затем повторите действие.",
   TELEGRAM_AUTH_IN_PROGRESS: "Предыдущий вход ещё завершается. Дождитесь следующего шага.",
   TELEGRAM_AUTH_STEP_CHANGED: "Этап входа изменился. Введите данные для текущего шага.",
   TELEGRAM_AUTH_REQUEST_FAILED:

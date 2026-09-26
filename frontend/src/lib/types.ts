@@ -8,6 +8,7 @@ export interface Connection {
 export interface Conversation {
   id: string;
   connectionId: string;
+  connectionStatus: string;
   externalId: string;
   title: string;
   selected: boolean;

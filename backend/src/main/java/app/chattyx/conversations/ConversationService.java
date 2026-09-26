@@ -25,12 +25,12 @@ public class ConversationService {
   }
 
   public Map<String, Object> get(UUID id) {
-    return db.one("SELECT * FROM conversation WHERE id=?", id);
+    return db.one("SELECT c.*,n.status AS connection_status FROM conversation c JOIN connection n ON n.id=c.connection_id WHERE c.id=?", id);
   }
 
   public List<Map<String, Object>> list() {
     return db.list(
-      "SELECT c.*,n.name AS account_name,n.adapter, (SELECT body FROM message WHERE conversation_id=c.id AND NOT deleted ORDER BY sent_at DESC LIMIT 1) AS preview FROM conversation c JOIN connection n ON n.id=c.connection_id ORDER BY c.last_activity DESC"
+      "SELECT c.*,n.name AS account_name,n.adapter,n.status AS connection_status, (SELECT body FROM message WHERE conversation_id=c.id AND NOT deleted ORDER BY sent_at DESC LIMIT 1) AS preview FROM conversation c JOIN connection n ON n.id=c.connection_id ORDER BY c.last_activity DESC"
     );
   }
 

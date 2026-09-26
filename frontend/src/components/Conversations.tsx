@@ -14,10 +14,11 @@ import {
   Sparkles,
   AlertCircle,
 } from "lucide-react";
-import { api, errorText } from "../lib/api";
+import { api, ApiError, errorText } from "../lib/api";
 import { type Conversation, type Message, type Outbound, type Fact, statuses } from "../lib/types";
 import { Button } from "./ui/button";
 import { HistoryImportNotice } from "./HistoryImportNotice";
+import { Authorization } from "./Authorization";
 import { SettingsEditor } from "./SettingsEditor";
 
 export function Conversations() {
@@ -133,9 +134,10 @@ export function Conversations() {
     </div>
   );
 }
-function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void }) {
+export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void }) {
   const cache = useQueryClient();
   const [text, setText] = useState(""),
+    [authorizationOpen, setAuthorizationOpen] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [panel, setPanel] = useState<"memory" | "settings" | null>(null),
@@ -143,6 +145,7 @@ function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void }) {
     [cursors, setCursors] = useState<string[]>([""]),
     [messageSearch, setMessageSearch] = useState("");
   const cursor = cursors[cursors.length-1];
+  const needsConnection = chat.adapter === "telegram" && chat.connectionStatus !== "READY";
   const pending = useRef<{ text: string; key: string } | null>(null);
   const messages = useQuery({
     queryKey: ["data", "messages", chat.id, cursor, messageSearch],
@@ -159,12 +162,21 @@ function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void }) {
   });
   async function act(path: string, method = "POST", body?: unknown) {
     setError("");
+    if (needsConnection && method !== "DELETE" &&
+        (path.endsWith("/selection") || path.endsWith("/import"))) {
+      setAuthorizationOpen(true);
+      return;
+    }
     setBusy(true);
     try {
       await api(path, method, body);
       await cache.invalidateQueries({ queryKey: ["data"] });
     } catch (e) {
       setError(errorText(e));
+      if (chat.adapter === "telegram" && e instanceof ApiError && e.code === "TELEGRAM_NOT_CONNECTED") {
+        setAuthorizationOpen(true);
+        await cache.invalidateQueries({ queryKey: ["data"] });
+      }
     } finally {
       setBusy(false);
     }
@@ -243,6 +255,14 @@ function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void }) {
             </Button>
           </div>
         </header>
+        {needsConnection && (
+          <div className="notice warning" role="status">
+            <span>Telegram не подключён. Завершите подключение аккаунта, чтобы загрузить историю.</span>
+            <Button size="small" variant="secondary" onClick={() => setAuthorizationOpen(true)}>
+              {chat.connectionStatus === "AUTHORIZING" ? "Продолжить вход" : "Подключить Telegram"}
+            </Button>
+          </div>
+        )}
         {!chat.selected && (
           <div className="selection-banner">
             <Sparkles size={20} />
@@ -406,6 +426,13 @@ function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void }) {
           </details>
         )}
       </section>
+      {authorizationOpen && (
+        <Authorization id={chat.connectionId} onClose={() => {
+          setAuthorizationOpen(false);
+          setError("");
+          void cache.invalidateQueries({ queryKey: ["data"] });
+        }} />
+      )}
       {panel && (
         <aside className="detail-panel">
           <header>

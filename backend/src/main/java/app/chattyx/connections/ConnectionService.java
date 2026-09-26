@@ -101,6 +101,19 @@ public class ConnectionService {
       var chat = db.one("SELECT * FROM conversation WHERE id=? FOR UPDATE", id);
       if (
         selected &&
+        !"READY".equals(
+          db
+            .one(
+              "SELECT status FROM connection WHERE id=?",
+              UUID.fromString(chat.get("connectionId").toString())
+            )
+            .get("status")
+        )
+      ) {
+        throw new ApiException(409, "TELEGRAM_NOT_CONNECTED");
+      }
+      if (
+        selected &&
         !Boolean.TRUE.equals(chat.get("selected")) &&
         db.jdbc.queryForObject("SELECT count(*) FROM conversation WHERE selected", Integer.class) >= 100
       ) throw new ApiException(409, "CHAT_LIMIT");

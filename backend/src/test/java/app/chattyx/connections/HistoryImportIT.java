@@ -143,6 +143,44 @@ class HistoryImportIT {
   }
 
   @Test
+  void selectingChatWhileAuthorizationIsPendingDoesNotPartiallySelectIt() {
+    db.jdbc.update("UPDATE connection SET status='AUTHORIZING' WHERE id=?", account);
+    db.jdbc.update("UPDATE conversation SET selected=false,imported=false,mode='PAUSED' WHERE id=?", chat);
+    var before = chats.get(chat);
+    assertThatThrownBy(() -> connections.select(chat, true)).isInstanceOfSatisfying(
+      ApiException.class,
+      error -> assertThat(error.code()).isEqualTo("TELEGRAM_NOT_CONNECTED")
+    );
+    assertThat(chats.get(chat))
+      .containsEntry("selected", false)
+      .containsEntry("importRunId", null)
+      .containsEntry("version", before.get("version"))
+      .containsEntry("connectionStatus", "AUTHORIZING");
+    assertThat(
+      chats
+        .list()
+        .stream()
+        .filter(row -> row.get("id").equals(chat.toString()))
+        .findFirst()
+        .orElseThrow()
+    ).containsEntry("connectionStatus", "AUTHORIZING");
+    verify(fake, never()).fetchHistory(any(), anyString(), any(), anyInt());
+  }
+
+  @Test
+  void disconnectedImportCanBeRetriedOnSameAccountAfterAuthorization() throws Exception {
+    db.jdbc.update("UPDATE connection SET status='DISCONNECTED',enabled=false WHERE id=?", account);
+    db.jdbc.update("UPDATE conversation SET imported=false,mode='PAUSED' WHERE id=?", chat);
+    assertThatThrownBy(() -> history.start(chat)).isInstanceOf(ApiException.class);
+    assertThat(chats.get(chat)).containsEntry("importRunId", null).containsEntry("mode", "PAUSED");
+    connections.authorize(account, "test");
+    complete();
+    assertPaused();
+    assertThat(count("connection")).isEqualTo(1);
+    assertThat(db.one("SELECT enabled FROM connection WHERE id=?", account)).containsEntry("enabled", false);
+  }
+
+  @Test
   void importHonorsThirtyDayCutoffIncludingBoundary() throws Exception {
     Instant cutoff = NOW.minus(Duration.ofDays(30));
     doReturn(
