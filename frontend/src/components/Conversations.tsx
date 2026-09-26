@@ -15,10 +15,11 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { api, ApiError, errorText } from "../lib/api";
-import { type Conversation, type Message, type Outbound, type Fact, statuses } from "../lib/types";
+import { type Conversation, type Message, type Outbound, type Fact, type RuntimeStatus, statuses } from "../lib/types";
 import { Button } from "./ui/button";
 import { HistoryImportNotice } from "./HistoryImportNotice";
 import { Authorization } from "./Authorization";
+import { SendingNotice } from "./SendingNotice";
 import { SettingsEditor } from "./SettingsEditor";
 
 export function Conversations() {
@@ -147,6 +148,12 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
   const cursor = cursors[cursors.length-1];
   const needsConnection = chat.adapter === "telegram" && chat.connectionStatus !== "READY";
   const pending = useRef<{ text: string; key: string } | null>(null);
+  const runtime = useQuery({
+    queryKey: ["data", "runtime"],
+    queryFn: () => api<RuntimeStatus>("/runtime"),
+    refetchInterval: 5000,
+  });
+  const canSend = runtime.data?.workersEnabled === true && chat.connectionStatus === "READY";
   const messages = useQuery({
     queryKey: ["data", "messages", chat.id, cursor, messageSearch],
     queryFn: () => api<Message[]>(`/conversations/${chat.id}/messages?cursor=${encodeURIComponent(cursor)}&search=${encodeURIComponent(messageSearch)}`),
@@ -183,7 +190,7 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
   }
   async function send(e: React.FormEvent) {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!text.trim() || !canSend || runtime.isError) return;
     if (!pending.current || pending.current.text !== text)
       pending.current = { text, key: crypto.randomUUID() };
     setBusy(true);
@@ -195,6 +202,10 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
       await cache.invalidateQueries({ queryKey: ["data"] });
     } catch (e) {
       setError(errorText(e));
+      void cache.invalidateQueries({ queryKey: ["data", "runtime"] });
+      if (chat.adapter === "telegram" && e instanceof ApiError && e.code === "TELEGRAM_NOT_CONNECTED") {
+        setAuthorizationOpen(true);
+      }
     } finally {
       setBusy(false);
     }
@@ -262,6 +273,14 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
               {chat.connectionStatus === "AUTHORIZING" ? "Продолжить вход" : "Подключить Telegram"}
             </Button>
           </div>
+        )}
+        {runtime.isError ? (
+          <div className="notice warning" role="alert">
+            Не удалось проверить доступность отправки.
+            <Button size="small" variant="secondary" onClick={() => void runtime.refetch()}>Повторить проверку</Button>
+          </div>
+        ) : runtime.data ? <SendingNotice chat={chat} runtime={runtime.data} /> : (
+          <p role="status" className="composer-note">Проверяем доступность отправки…</p>
         )}
         {!chat.selected && (
           <div className="selection-banner">
@@ -361,7 +380,7 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
           )}
           {drafts.map((d) => (
             <div className="draft" key={d.id}>
-              <strong>{statuses[d.status] ?? d.status}</strong>
+              <strong>{d.status === "READY" ? "В очереди на отправку" : (statuses[d.status] ?? d.status)}</strong>
               <p>{d.body}</p>
               {["DRAFT", "STALE"].includes(d.status) && (
                 <Button size="small" variant="secondary" onClick={() => setText(d.body)}>
@@ -399,7 +418,7 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
             maxLength={4000}
             rows={2}
           />
-          <Button aria-label="Отправить сообщение" size="icon" disabled={busy || !text.trim()}>
+          <Button aria-label="Отправить сообщение" size="icon" disabled={busy || !text.trim() || !canSend || runtime.isError}>
             <Send size={18} />
           </Button>
         </form>

@@ -9,6 +9,7 @@ export interface Conversation {
   id: string;
   connectionId: string;
   connectionStatus: string;
+  connectionEnabled: boolean;
   externalId: string;
   title: string;
   selected: boolean;
@@ -24,6 +25,12 @@ export interface Conversation {
   accountName: string;
   adapter: string;
   preview: string | null;
+}
+export interface RuntimeStatus {
+  workersEnabled: boolean;
+  automationEnabled: boolean;
+  modelConfigured: boolean;
+  demo: boolean;
 }
 export interface Message {
   id: string;

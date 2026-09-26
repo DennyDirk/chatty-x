@@ -20,6 +20,7 @@ const base: Conversation = {
   id: "chat",
   connectionId: "account",
   connectionStatus: "AUTHORIZING",
+  connectionEnabled: false,
   externalId: "1001",
   title: "Тестовый чат",
   selected: false,

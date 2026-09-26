@@ -27,7 +27,7 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?Set TELEGRAM_API_HASH in .env.telegram-test}
       CHATTY_MODE: production
       COOKIE_SECURE: "false"
-      WORKERS_ENABLED: "false"
+      WORKERS_ENABLED: ${WORKERS_ENABLED:-false}
       DATA_DIR: /data
     volumes:
       - application:/data

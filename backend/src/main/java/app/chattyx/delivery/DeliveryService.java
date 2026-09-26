@@ -50,6 +50,10 @@ public class DeliveryService {
     this.enabled = enabled;
   }
 
+  public boolean enabled() {
+    return enabled;
+  }
+
   public Map<String, Object> manual(UUID chat, String text, String key) {
     if (
       text == null || text.isBlank() || text.length() > 4000 || key == null || key.length() > 100
@@ -63,6 +67,10 @@ public class DeliveryService {
           !row.get("conversationId").equals(chat.toString()) || !row.get("body").equals(text)
         ) throw new ApiException(409, "IDEMPOTENCY_KEY_CONFLICT");
         return row;
+      }
+      if (!enabled) throw new ApiException(409, "PROCESSING_DISABLED");
+      if (!"READY".equals(chats.get(chat).get("connectionStatus"))) {
+        throw new ApiException(409, "TELEGRAM_NOT_CONNECTED");
       }
       chats.pause(chat, "MANUAL_TAKEOVER");
       long version = ((Number) chats.get(chat).get("version")).longValue();

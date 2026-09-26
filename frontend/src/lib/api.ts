@@ -41,6 +41,7 @@ const errors: Record<string, string> = {
   INVALID_BOOTSTRAP_TOKEN: "Неверный ключ первоначальной настройки.",
   BUDGET_EXHAUSTED: "Лимит расходов достигнут. Ручные ответы доступны.",
   MODEL_KEY_REQUIRED: "Добавьте API-ключ в общих настройках.",
+  PROCESSING_DISABLED: "Отправка отключена на сервере. Сообщение не добавлено в очередь; текст сохранён в поле ответа.",
   TELEGRAM_APP_CREDENTIALS_REQUIRED: "Укажите TELEGRAM_API_ID и TELEGRAM_API_HASH на сервере.",
   TELEGRAM_NOT_CONNECTED:
     "Telegram не подключён. Откройте подключение и завершите вход, затем повторите действие.",

@@ -55,10 +55,16 @@ test('owner setup, account selection, one reply per burst, manual takeover and m
   await page.reload();
   await page.getByRole('button',{name:/Аня · тестовый чат/}).click();
   await expect(page.locator('.messages').getByText('Слышу тебя 🙂 Расскажешь чуть подробнее?')).toBeVisible();
+  await mutate(page.request,'/stop','POST');
+  await mutate(page.request,`/connections/${connection.id}/enabled`,'PUT',{enabled:false});
+  await expect(page.getByText('Автоответы выключены в общих настройках.')).toBeVisible();
+  await expect(page.getByText('Автоматизация аккаунта выключена.')).toBeVisible();
+  expect(await(await page.request.get('/api/v1/runtime')).json()).toEqual({workersEnabled:true,automationEnabled:false,modelConfigured:false,demo:true});
   await page.getByLabel('Ваш ответ').fill('Сейчас отвечу сам');
   await page.getByRole('button',{name:'Отправить сообщение',exact:true}).click();
   await expect(page.getByRole('button',{name:'Возобновить'})).toBeVisible();
   await expect(page.locator('.messages').getByText('Сейчас отвечу сам',{exact:true})).toBeVisible();
+  await expect.poll(async()=> (await(await page.request.get(`/api/v1/conversations/${chat.id}/messages`)).json()).filter((m:{source:string})=>m.source==='WEB_OWNER').length).toBe(1);
   await mutate(page.request,`/conversations/${chat.id}/simulate`,'POST',{text:'А ещё вопрос',outgoing:false});
   const state=await(await page.request.get(`/api/v1/conversations/${chat.id}`)).json();expect(state.mode).toBe('PAUSED');
   await page.screenshot({path:'test-results/desktop.png',fullPage:true});

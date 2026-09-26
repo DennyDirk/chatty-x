@@ -9,6 +9,7 @@ import app.chattyx.memory.MemoryService;
 import app.chattyx.personas.SettingsService;
 import app.chattyx.shared.*;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
@@ -29,6 +30,7 @@ public class ApiController {
   private final BudgetService budget;
   private final ReplyModel model;
   private final Events events;
+  private final boolean demo;
 
   public ApiController(
     Db db,
@@ -41,7 +43,8 @@ public class ApiController {
     MediaService media,
     BudgetService budget,
     ReplyModel model,
-    Events events
+    Events events,
+    @Value("${chatty.mode}") String mode
   ) {
     this.db = db;
     this.connections = connections;
@@ -54,6 +57,7 @@ public class ApiController {
     this.budget = budget;
     this.model = model;
     this.events = events;
+    this.demo = "demo".equals(mode);
   }
 
   @GetMapping("/connections")
@@ -262,6 +266,16 @@ public class ApiController {
   @GetMapping("/usage")
   public Object usage() {
     return budget.overview();
+  }
+
+  @GetMapping("/runtime")
+  public Object runtime() {
+    return Map.of(
+      "workersEnabled", delivery.enabled(),
+      "automationEnabled", settings.read("global").path("enabled").asBoolean(),
+      "modelConfigured", settings.credential("openai").isPresent(),
+      "demo", demo
+    );
   }
 
   @GetMapping("/diagnostics")

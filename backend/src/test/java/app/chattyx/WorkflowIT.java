@@ -56,7 +56,11 @@ class WorkflowIT {
     @Autowired ConversationService chats;
     @Autowired ConnectionService connections;
     @Autowired SettingsService settings;
-    @Autowired DeliveryService delivery;
+    @Autowired DeliveryService stoppedDelivery;
+    @Autowired ChannelRegistry channels;
+    @Autowired Events events;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    DeliveryService delivery;
     @Autowired AutomationWorker worker;
     @Autowired MemoryService memory;
     @Autowired BudgetService budget;
@@ -68,6 +72,8 @@ class WorkflowIT {
     UUID chat;
 
     @BeforeEach void setup() {
+        // Production scheduling stays disabled; each test advances the real service explicitly.
+        delivery = new DeliveryService(db, chats, settings, channels, clock, events, budget, transactions, true);
         db.jdbc.execute("TRUNCATE connection, usage_entry, audit_event CASCADE");
         db.jdbc.update("DELETE FROM app_settings WHERE scope<>'global'");
         db.jdbc.update("UPDATE app_settings SET body=jsonb_set(jsonb_set(body,'{enabled}','true'),'{monthlyBudgetUsd}','30') WHERE scope='global'");
@@ -87,6 +93,49 @@ class WorkflowIT {
         return db.jdbc.queryForObject("SELECT id FROM outbound WHERE conversation_id=? AND status='READY'", UUID.class, chat);
     }
     String status(UUID id) { return db.jdbc.queryForObject("SELECT status FROM outbound WHERE id=?",String.class,id); }
+
+    @Test void disabledProcessingRejectsNewManualReplyWithoutChangingConversation() {
+        var before=chats.get(chat);
+        assertThatThrownBy(()->stoppedDelivery.manual(chat,"Synthetic reply","disabled-send"))
+            .isInstanceOfSatisfying(ApiException.class,e->assertThat(e.code()).isEqualTo("PROCESSING_DISABLED"));
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM outbound",Integer.class)).isZero();
+        assertThat(chats.get(chat)).containsEntry("mode",before.get("mode")).containsEntry("version",before.get("version"));
+        verify(fake,never()).sendText(any());
+    }
+    @Test void existingManualRequestRemainsIdempotentWhenProcessingStops() {
+        var accepted=delivery.manual(chat,"Synthetic reply","already-accepted");
+        assertThat(stoppedDelivery.manual(chat,"Synthetic reply","already-accepted").get("id")).isEqualTo(accepted.get("id"));
+        stoppedDelivery.tick();
+        assertThat(status(UUID.fromString(accepted.get("id").toString()))).isEqualTo("READY");
+        verify(fake,never()).sendText(any());
+    }
+    @Test void scheduledDeliverySendsOwnerReplyWithoutAutomationOrModelKey() {
+        db.jdbc.update("UPDATE app_settings SET body=jsonb_set(body,'{enabled}','false') WHERE scope='global'");
+        db.jdbc.update("UPDATE connection SET enabled=false WHERE id=?",connection);
+        db.jdbc.update("DELETE FROM credential WHERE name='openai'");
+        var accepted=delivery.manual(chat,"Synthetic manual reply","manual-without-ai");
+        delivery.tick();delivery.tick();
+        assertThat(status(UUID.fromString(accepted.get("id").toString()))).isEqualTo("SENT");
+        assertThat(chats.get(chat)).containsEntry("mode","PAUSED");
+        verify(fake,times(1)).sendText(any());verifyNoInteractions(model);
+    }
+    @Test void manualReplyToDisconnectedAccountIsNotQueued() {
+        db.jdbc.update("UPDATE connection SET status='DISCONNECTED' WHERE id=?",connection);
+        assertThatThrownBy(()->delivery.manual(chat,"Synthetic reply","offline-send"))
+            .isInstanceOfSatisfying(ApiException.class,e->assertThat(e.code()).isEqualTo("TELEGRAM_NOT_CONNECTED"));
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM outbound",Integer.class)).isZero();
+        verify(fake,never()).sendText(any());
+    }
+    @Test void runtimeEndpointExposesOnlyAvailabilityAndRequiresAuthentication() throws Exception {
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(web).apply(org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/runtime"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isUnauthorized());
+        db.jdbc.update("DELETE FROM credential WHERE name='openai'");
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/runtime")
+            .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("owner")))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().json("{\"workersEnabled\":false,\"automationEnabled\":true,\"modelConfigured\":false,\"demo\":true}"));
+    }
 
     @Test void fiveMessagesProduceOneReplyContainingWholeBurst() {
         for (int n=0;n<5;n++) { receive("burst-"+n); clock.advance(3); }
