@@ -2,6 +2,8 @@ package app.chattyx.shared;
 
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Component
@@ -27,6 +29,29 @@ public class Events {
   }
 
   public void changed() {
+    if (
+      TransactionSynchronizationManager.isActualTransactionActive() &&
+      TransactionSynchronizationManager.isSynchronizationActive()
+    ) {
+      if (
+        TransactionSynchronizationManager.getSynchronizations()
+          .stream()
+          .noneMatch(RefreshAfterCommit.class::isInstance)
+      ) TransactionSynchronizationManager.registerSynchronization(new RefreshAfterCommit());
+      return;
+    }
+    broadcast();
+  }
+
+  private class RefreshAfterCommit implements TransactionSynchronization {
+
+    @Override
+    public void afterCommit() {
+      broadcast();
+    }
+  }
+
+  private void broadcast() {
     for (var e : clients)
       try {
         e.send(SseEmitter.event().name("refresh").data("changed"));

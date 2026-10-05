@@ -97,6 +97,28 @@ class TelegramAuthorizationTest {
   }
 
   @Test
+  void discoveryCarriesLastMessageDateInsteadOfDiscoveryTime() {
+    adapter.beginAuthorization(account,"phone");
+    var chat=Json.object("chat").put("id",123).put("title","Synthetic chat");
+    chat.set("type",Json.object("chatTypePrivate").put("user_id",77));
+    chat.set("last_message",Json.object("message").put("date",1700000000));
+    clients.getFirst().accept(Json.object("updateNewChat").set("chat",chat));
+    assertThat(events).contains(new MessagingAdapter.Chat(account,"123","Synthetic chat",true,java.time.Instant.ofEpochSecond(1700000000)));
+  }
+
+  @Test
+  void lastMessageUpdatesCarryOnlyDateAndHandleUnknownLastMessage() {
+    adapter.beginAuthorization(account,"phone");
+    var update=Json.object("updateChatLastMessage").put("chat_id",123);
+    update.set("last_message",Json.object("message").put("date",1700000001).put("body","Do not store preview"));
+    clients.getFirst().accept(update);
+    assertThat(events).contains(new MessagingAdapter.ChatActivity(account,"123",java.time.Instant.ofEpochSecond(1700000001)));
+    update.putNull("last_message");clients.getFirst().accept(update);
+    assertThat(events).contains(new MessagingAdapter.ChatActivity(account,"123",null));
+    assertThat(events.toString()).doesNotContain("Do not store preview");
+  }
+
+  @Test
   void switchingQrToPhoneWaitsForCloseAndIgnoresOldClientEvents() {
     adapter.beginAuthorization(account, "qr");
     state(1, "authorizationStateWaitPhoneNumber");

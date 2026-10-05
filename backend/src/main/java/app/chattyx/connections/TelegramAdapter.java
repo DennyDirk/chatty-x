@@ -282,8 +282,11 @@ public class TelegramAdapter implements MessagingAdapter {
             eligible = false;
           }
         }
-        listener.accept(new Chat(id, chat.path("id").asText(), chat.path("title").asText(), eligible));
+        listener.accept(new Chat(id, chat.path("id").asText(), chat.path("title").asText(), eligible,
+            lastMessageTime(chat.path("last_message"))));
       }
+      case "updateChatLastMessage" -> listener.accept(new ChatActivity(id, event.path("chat_id").asText(),
+          lastMessageTime(event.path("last_message"))));
       case "updateNewMessage" -> listener.accept(new NewMessage(incoming(id, event.path("message"), false)));
       case "updateMessageContent" -> listener.accept(
         new Edited(
@@ -329,6 +332,11 @@ public class TelegramAdapter implements MessagingAdapter {
       default -> {
       }
     }
+  }
+
+  private static java.time.Instant lastMessageTime(JsonNode message) {
+    long seconds = message.path("date").asLong();
+    return seconds > 0 ? java.time.Instant.ofEpochSecond(seconds) : null;
   }
 
   private synchronized void closed(UUID id) {

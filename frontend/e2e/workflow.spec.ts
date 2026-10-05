@@ -67,6 +67,16 @@ test('owner setup, account selection, one reply per burst, manual takeover and m
   await expect.poll(async()=> (await(await page.request.get(`/api/v1/conversations/${chat.id}/messages`)).json()).filter((m:{source:string})=>m.source==='WEB_OWNER').length).toBe(1);
   await mutate(page.request,`/conversations/${chat.id}/simulate`,'POST',{text:'А ещё вопрос',outgoing:false});
   const state=await(await page.request.get(`/api/v1/conversations/${chat.id}`)).json();expect(state.mode).toBe('PAUSED');
+  const other=chats.find((c:{externalId:string})=>c.externalId==='1002');
+  await page.getByLabel('Ваш ответ').fill('Черновик в открытом чате');
+  await mutate(page.request,`/conversations/${other.id}/simulate`,'POST',{text:'New activity in unselected chat',outgoing:false});
+  await expect(page.locator('.chat-items .chat-item').first()).toContainText('Марк · тестовый чат');
+  await expect(page.locator('.chat-items .chat-item.active')).toContainText('Аня · тестовый чат');
+  await expect(page.getByLabel('Ваш ответ')).toHaveValue('Черновик в открытом чате');
+  expect((await(await page.request.get(`/api/v1/conversations/${other.id}/messages`)).json())).toHaveLength(0);
+  await mutate(page.request,`/conversations/${chat.id}/simulate`,'POST',{text:'Latest incoming in paused chat',outgoing:false});
+  await expect(page.locator('.chat-items .chat-item').first()).toContainText('Аня · тестовый чат');
+  await expect(page.getByLabel('Ваш ответ')).toHaveValue('Черновик в открытом чате');
   await page.screenshot({path:'test-results/desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});
   await expect(page.getByLabel('Ваш ответ')).toBeVisible();

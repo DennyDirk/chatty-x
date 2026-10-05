@@ -57,6 +57,7 @@ public class ChannelEvents {
     switch (event) {
       case MessagingAdapter.NewMessage e -> chats.receive(e.message());
       case MessagingAdapter.Chat e -> chats.discover(e);
+      case MessagingAdapter.ChatActivity e -> chats.activity(e);
       case MessagingAdapter.Edited e -> chats.edit(e.connectionId(), e.chatId(), e.messageId(), e.text());
       case MessagingAdapter.Deleted e -> chats.delete(e.connectionId(), e.chatId(), e.messageIds());
       case MessagingAdapter.Delivered e -> delivery.confirmation(e);

@@ -37,9 +37,10 @@ public interface MessagingAdapter {
   record Receipt(String temporaryId, String finalId, boolean confirmed) {}
 
   record History(List<Incoming> messages, String nextCursor) {}
+
   record Snapshot(List<Incoming> messages, List<String> missingIds) {}
 
-  sealed interface Event permits NewMessage, Edited, Deleted, Chat, State, Delivered {}
+  sealed interface Event permits NewMessage, Edited, Deleted, Chat, ChatActivity, State, Delivered {}
 
   record NewMessage(Incoming message) implements Event {}
 
@@ -47,7 +48,19 @@ public interface MessagingAdapter {
 
   record Deleted(UUID connectionId, String chatId, List<String> messageIds) implements Event {}
 
-  record Chat(UUID connectionId, String chatId, String title, boolean eligible) implements Event {}
+  record Chat(
+    UUID connectionId,
+    String chatId,
+    String title,
+    boolean eligible,
+    Instant lastMessageAt
+  ) implements Event {
+    public Chat(UUID connectionId, String chatId, String title, boolean eligible) {
+      this(connectionId, chatId, title, eligible, null);
+    }
+  }
+
+  record ChatActivity(UUID connectionId, String chatId, Instant lastMessageAt) implements Event {}
 
   record State(UUID connectionId, String status, String step, Map<String, String> fields) implements Event {}
 
@@ -72,7 +85,12 @@ public interface MessagingAdapter {
   void markRead(UUID connectionId, String chatId, String messageId);
   void setTyping(UUID connectionId, String chatId, boolean active);
   Path download(UUID connectionId, String fileId, long maxBytes);
+
   default void releaseFile(UUID connectionId, String fileId) {}
-  default Optional<Snapshot> fetchMessages(UUID connectionId,String chatId,List<String> ids){return Optional.empty();}
+
+  default Optional<Snapshot> fetchMessages(UUID connectionId, String chatId, List<String> ids) {
+    return Optional.empty();
+  }
+
   Optional<Receipt> reconcile(UUID connectionId, String chatId, String temporaryId);
 }

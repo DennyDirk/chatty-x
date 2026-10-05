@@ -30,7 +30,7 @@ public class ConversationService {
 
   public List<Map<String, Object>> list() {
     return db.list(
-      "SELECT c.*,n.name AS account_name,n.adapter,n.status AS connection_status,n.enabled AS connection_enabled, (SELECT body FROM message WHERE conversation_id=c.id AND NOT deleted ORDER BY sent_at DESC LIMIT 1) AS preview FROM conversation c JOIN connection n ON n.id=c.connection_id ORDER BY c.last_activity DESC"
+      "SELECT c.*,n.name AS account_name,n.adapter,n.status AS connection_status,n.enabled AS connection_enabled, (SELECT body FROM message WHERE conversation_id=c.id AND NOT deleted ORDER BY sent_at DESC,id DESC LIMIT 1) AS preview FROM conversation c JOIN connection n ON n.id=c.connection_id ORDER BY c.last_activity DESC NULLS LAST,c.id ASC"
     );
   }
 
@@ -59,13 +59,25 @@ public class ConversationService {
   public void discover(Chat event) {
     if (!event.eligible()) return;
     db.jdbc.update(
-      "INSERT INTO conversation(id,connection_id,external_id,title) VALUES (?,?,?,?) ON CONFLICT(connection_id,external_id) DO UPDATE SET title=excluded.title",
+      "INSERT INTO conversation(id,connection_id,external_id,title,last_activity) VALUES (?,?,?,?,?) ON CONFLICT(connection_id,external_id) DO UPDATE SET title=excluded.title,last_activity=COALESCE(excluded.last_activity,conversation.last_activity)",
       UUID.randomUUID(),
       event.connectionId(),
       event.chatId(),
-      event.title()
+      event.title(),
+      event.lastMessageAt() == null ? null : Timestamp.from(event.lastMessageAt())
     );
     events.changed();
+  }
+
+  @Transactional
+  public void activity(ChatActivity event) {
+    // A provider update can move backwards after deleting the latest message.
+    // Null means unknown, so fall back to surviving locally stored messages.
+    int updated = db.jdbc.update(
+        "UPDATE conversation c SET last_activity=COALESCE(?::timestamptz,(SELECT max(sent_at) FROM message WHERE conversation_id=c.id AND NOT deleted)) WHERE connection_id=? AND external_id=?",
+        event.lastMessageAt() == null ? null : Timestamp.from(event.lastMessageAt()),
+        event.connectionId(), event.chatId());
+    if (updated > 0) events.changed();
   }
 
   @Transactional
@@ -79,7 +91,15 @@ public class ConversationService {
     if (rows.isEmpty()) return;
     UUID id = rows.getFirst();
     var chat = db.one("SELECT * FROM conversation WHERE id=? FOR UPDATE", id);
-    if (!Boolean.TRUE.equals(chat.get("selected"))) return;
+    if (!Boolean.TRUE.equals(chat.get("selected"))) {
+      if (!message.historical()) {
+        int updated = db.jdbc.update(
+            "UPDATE conversation SET last_activity=? WHERE id=? AND (last_activity IS NULL OR last_activity<?)",
+            Timestamp.from(message.time()), id, Timestamp.from(message.time()));
+        if (updated > 0) events.changed();
+      }
+      return;
+    }
     boolean owned = false;
     if (message.outgoing()) {
       var own = db.jdbc.queryForList(
@@ -159,7 +179,10 @@ public class ConversationService {
       attention(id, "OLD_INCOMING");
       return;
     }
-    if (!chat.get("mode").equals("AUTO")) return;
+    if (!chat.get("mode").equals("AUTO")) {
+      events.changed();
+      return;
+    }
     schedule(id);
     events.changed();
   }
@@ -287,6 +310,10 @@ public class ConversationService {
         id,
         external
       );
+      // Do not erase newer provider metadata when deleting an older stored message.
+      db.jdbc.update(
+          "UPDATE conversation c SET last_activity=(SELECT max(sent_at) FROM message WHERE conversation_id=c.id AND NOT deleted) WHERE c.id=? AND c.last_activity=(SELECT sent_at FROM message WHERE conversation_id=c.id AND external_id=?)",
+          id, external);
       invalidate(id);
       if (get(id).get("mode").equals("AUTO")) schedule(id);
     }

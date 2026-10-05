@@ -99,6 +99,69 @@ class WorkflowIT {
         long version=((Number)settings.view("global").get("version")).longValue();
         settings.save("global",version,Map.of("modelProvider","ollama","monthlyBudgetUsd",0));
     }
+    UUID otherChat() {
+        return db.jdbc.queryForObject("SELECT id FROM conversation WHERE connection_id=? AND external_id='1002'",UUID.class,connection);
+    }
+    List<String> orderedChats() { return chats.list().stream().map(row->row.get("id").toString()).toList(); }
+    @Test void discoveryUsesMessageDatesAndUnknownDatesStayLast() {
+        Instant old=clock.instant().minusSeconds(7200), newer=clock.instant().minusSeconds(3600);
+        chats.discover(new MessagingAdapter.Chat(connection,"1001","Latest",true,newer));
+        chats.discover(new MessagingAdapter.Chat(connection,"1002","Old discovered later",true,old));
+        chats.discover(new MessagingAdapter.Chat(connection,"empty","No messages",true));
+        assertThat(orderedChats().subList(0,2)).containsExactly(chat.toString(),otherChat().toString());
+        assertThat(chats.get(otherChat()).get("lastActivity")).isEqualTo(old.toString());
+        assertThat(chats.list().getLast().get("lastActivity")).isNull();
+    }
+    @Test void historicalImportAndDelayedEventsDoNotUseProcessingTime() {
+        Instant latest=clock.instant().minusSeconds(120), old=clock.instant().minusSeconds(600);
+        chats.discover(new MessagingAdapter.Chat(connection,"1002","Recent",true,latest));
+        var historical=new MessagingAdapter.Incoming(connection,"1001","historical","Old history",old,false,true,false,null,null,null);
+        chats.receive(historical);chats.receive(historical);
+        assertThat(orderedChats()).containsExactly(otherChat().toString(),chat.toString());
+        assertThat(chats.get(chat).get("lastActivity")).isEqualTo(old.toString());
+        receive("newest");
+        chats.receive(new MessagingAdapter.Incoming(connection,"1001","late","Late event",old,false,false,false,null,null,null));
+        assertThat(chats.get(chat).get("lastActivity")).isEqualTo(clock.instant().toString());
+        assertThat(orderedChats()).containsExactly(chat.toString(),otherChat().toString());
+    }
+    @Test void unselectedIncomingUpdatesOnlyActivityWithoutSavingPrivateContentOrScheduling() {
+        receive("selected-first");clock.advance(1);
+        var message=new MessagingAdapter.Incoming(connection,"1002","unselected","Must not persist",clock.instant(),false,false,false,null,null,null);
+        chats.receive(message);chats.receive(message);
+        assertThat(orderedChats()).containsExactly(otherChat().toString(),chat.toString());
+        assertThat(chats.get(otherChat())).containsEntry("selected",false).containsEntry("mode","PAUSED");
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM message WHERE conversation_id=?",Integer.class,otherChat())).isZero();
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM automation_job WHERE conversation_id=?",Integer.class,otherChat())).isZero();
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM memory_job WHERE conversation_id=?",Integer.class,otherChat())).isZero();
+    }
+    @Test void pausedIncomingMovesChatWithoutResumingAutomation() {
+        chats.discover(new MessagingAdapter.Chat(connection,"1002","Other",true,clock.instant()));
+        chats.control(chat,"pause");clock.advance(1);receive("paused-new");
+        assertThat(orderedChats().getFirst()).isEqualTo(chat.toString());
+        assertThat(chats.get(chat)).containsEntry("mode","PAUSED");
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM automation_job",Integer.class)).isZero();
+    }
+    @Test void providerActivityAndDeletingLatestMessageCanMoveChatBackwards() {
+        receive("old");clock.advance(1);
+        chats.discover(new MessagingAdapter.Chat(connection,"1002","Middle",true,clock.instant()));
+        clock.advance(1);receive("latest");
+        assertThat(orderedChats().getFirst()).isEqualTo(chat.toString());
+        chats.delete(connection,"1001",List.of("latest"));
+        assertThat(orderedChats().getFirst()).isEqualTo(otherChat().toString());
+        chats.activity(new MessagingAdapter.ChatActivity(connection,"1002",clock.instant().minusSeconds(100)));
+        assertThat(orderedChats().getFirst()).isEqualTo(chat.toString());
+        chats.activity(new MessagingAdapter.ChatActivity(connection,"1002",null));
+        assertThat(chats.get(otherChat()).get("lastActivity")).isNull();
+    }
+    @Test void equalMessageDatesHaveStableOrderAndEditingDoesNotRaiseChat() {
+        receive("edit-old");
+        chats.discover(new MessagingAdapter.Chat(connection,"1002","Same second",true,clock.instant()));
+        var expected=new ArrayList<>(List.of(chat.toString(),otherChat().toString()));Collections.sort(expected);
+        assertThat(orderedChats()).isEqualTo(expected);
+        clock.advance(100);chats.edit(connection,"1001","edit-old","Corrected");
+        assertThat(orderedChats()).isEqualTo(expected);
+        assertThat(chats.get(chat).get("lastActivity")).isEqualTo(clock.instant().minusSeconds(100).toString());
+    }
     @Test void memoryContractStoresValidatedLocalFactWithSource() {
         localProvider();receive("local-memory");
         UUID source=db.jdbc.queryForObject("SELECT id FROM message WHERE conversation_id=?",UUID.class,chat);
