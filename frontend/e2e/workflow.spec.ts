@@ -59,7 +59,7 @@ test('owner setup, account selection, one reply per burst, manual takeover and m
   await mutate(page.request,`/connections/${connection.id}/enabled`,'PUT',{enabled:false});
   await expect(page.getByText('Автоответы выключены в общих настройках.')).toBeVisible();
   await expect(page.getByText('Автоматизация аккаунта выключена.')).toBeVisible();
-  expect(await(await page.request.get('/api/v1/runtime')).json()).toEqual({workersEnabled:true,automationEnabled:false,modelConfigured:false,demo:true});
+  expect(await(await page.request.get('/api/v1/runtime')).json()).toEqual({workersEnabled:true,automationEnabled:false,modelConfigured:false,modelProvider:'openai',demo:true});
   await page.getByLabel('Ваш ответ').fill('Сейчас отвечу сам');
   await page.getByRole('button',{name:'Отправить сообщение',exact:true}).click();
   await expect(page.getByRole('button',{name:'Возобновить'})).toBeVisible();
@@ -72,4 +72,19 @@ test('owner setup, account selection, one reply per burst, manual takeover and m
   await expect(page.getByLabel('Ваш ответ')).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:'test-results/mobile.png',fullPage:true});
+  await page.goto('/profile');
+  await page.getByRole('button',{name:'Автоматизация',exact:true}).click();
+  await page.getByLabel('Провайдер ответов и памяти').selectOption('ollama');
+  await page.getByRole('button',{name:'Сохранить настройки'}).click();
+  await expect.poll(async()=> (await(await page.request.get('/api/v1/runtime')).json()).modelProvider).toBe('ollama');
+  const localRuntime=await(await page.request.get('/api/v1/runtime')).json();
+  expect(localRuntime.modelConfigured).toBe(true);
+  expect(localRuntime.automationEnabled).toBe(false);
+  await page.reload();
+  await page.getByRole('button',{name:'Автоматизация',exact:true}).click();
+  await expect(page.getByLabel('Провайдер ответов и памяти')).toHaveValue('ollama');
+  await expect(page.getByText(/Фото и голосовые потребуют/)).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.getByLabel('Провайдер ответов и памяти').scrollIntoViewIfNeeded();
+  await page.screenshot({path:'test-results/ollama-mobile.png',fullPage:true});
 });

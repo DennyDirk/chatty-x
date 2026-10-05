@@ -20,6 +20,15 @@ public class SettingsService {
     this.box = box;
   }
 
+  public boolean localModel() {
+    return read("global").path("modelProvider").asText("openai").equals("ollama");
+  }
+
+  public boolean modelConfigured() {
+    // Configuration only: reachability is checked by an actual playground/generation request.
+    return localModel() || credential("openai").isPresent();
+  }
+
   public ObjectNode effective(UUID conversation) {
     var result = read("global");
     if (conversation != null) {
@@ -57,6 +66,7 @@ public class SettingsService {
     validateScope(scope);
     if (body == null) throw new ApiException(400, "INVALID_SETTINGS");
     ObjectNode value = Json.MAPPER.valueToTree(body);
+    if (!scope.equals("global") && value.has("modelProvider")) throw new ApiException(400, "GLOBAL_SETTING_ONLY");
     validate(value);
     if (scope.equals("global")) {
       ObjectNode complete = read("global");
@@ -122,6 +132,8 @@ public class SettingsService {
   }
 
   private void validate(ObjectNode value) {
+    if (value.has("modelProvider") && !Set.of("openai", "ollama").contains(value.path("modelProvider").asText()))
+      throw new ApiException(400, "INVALID_MODEL_PROVIDER");
     var allowed = read("global");
     value.fieldNames().forEachRemaining(k -> {
       if (!allowed.has(k)) throw new ApiException(400, "UNKNOWN_SETTING");

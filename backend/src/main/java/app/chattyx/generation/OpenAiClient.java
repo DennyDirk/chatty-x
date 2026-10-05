@@ -14,7 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
-public class OpenAiClient {
+public class OpenAiClient implements StructuredModel {
 
   private final SettingsService settings;
   private final BudgetService budget;
@@ -117,19 +117,10 @@ public class OpenAiClient {
   }
 
   public static ObjectNode schema(Map<String, JsonNode> properties) {
-    var schema = Json.object().put("type", "object").put("additionalProperties", false);
-    var props = Json.object();
-    var required = Json.MAPPER.createArrayNode();
-    properties.forEach((k, v) -> {
-      props.set(k, v);
-      required.add(k);
-    });
-    schema.set("properties", props);
-    schema.set("required", required);
-    return schema;
+    return ModelSchema.schema(properties);
   }
 
   public static ObjectNode stringSchema() {
-    return Json.object().put("type", "string");
+    return ModelSchema.stringSchema();
   }
 }

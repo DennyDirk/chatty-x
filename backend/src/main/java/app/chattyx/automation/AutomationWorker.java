@@ -229,7 +229,13 @@ public class AutomationWorker {
             chat,
             token
           ) > 0
-        ) chats.attention(chat, e instanceof ApiException a ? a.code() : "GENERATION_FAILED");
+        ) {
+          if (e instanceof ApiException a && a.code().equals("MODEL_BUSY")) {
+            db.jdbc.update("UPDATE automation_job SET state='WAITING',lease_token=NULL,lease_until=NULL,due_at=? WHERE conversation_id=? AND lease_token=?",
+                Timestamp.from(clock.instant().plusSeconds(3)), chat, token);
+            db.jdbc.update("UPDATE conversation SET status='WAITING' WHERE id=?", chat);
+          } else chats.attention(chat, e instanceof ApiException a ? a.code() : "GENERATION_FAILED");
+        }
       });
     } finally {
       try {

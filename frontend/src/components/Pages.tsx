@@ -174,7 +174,7 @@ export function Profile() {
         <p className="muted">
           {credentials.data?.openaiConfigured
             ? "Ключ сохранён в зашифрованном виде."
-            : "Добавьте OpenAI API-ключ для рабочих ответов."}
+            : "Для OpenAI нужен API-ключ. При выборе Ollama ключ не требуется."}
         </p>
         <form
           onSubmit={(e) => {

@@ -1,0 +1,17 @@
+# Local JVM / IntelliJ only. Production and Docker keep application.yml defaults.
+spring:
+  config:
+    import: file:./.env[.properties]
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:55432/chattyx
+    username: chattyx
+    password: ${DB_PASSWORD}
+server:
+  address: 127.0.0.1
+  servlet:
+    session:
+      cookie:
+        secure: false
+chatty:
+  mode: demo
+  data-dir: ./data/local

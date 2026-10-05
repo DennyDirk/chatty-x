@@ -191,11 +191,13 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
   async function send(e: React.FormEvent) {
     e.preventDefault();
     if (!text.trim() || !canSend || runtime.isError) return;
-    if (!pending.current || pending.current.text !== text)
-      pending.current = { text, key: crypto.randomUUID() };
     setBusy(true);
     setError("");
     try {
+      if (!pending.current || pending.current.text !== text) {
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        pending.current = { text, key: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("") };
+      }
       await api(`/conversations/${chat.id}/messages`, "POST", { text, requestKey: pending.current.key });
       pending.current = null;
       setText("");
@@ -309,7 +311,7 @@ export function Chat({ chat, onBack }: { chat: Conversation; onBack: () => void 
                 ? "проверьте черновик"
                 : chat.needsAttention === "OLD_INCOMING"
                   ? "накопились давние сообщения"
-                  : chat.needsAttention}
+                  : errorText(new ApiError(chat.needsAttention, 409))}
             </span>
           </div>
         )}

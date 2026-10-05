@@ -25,8 +25,11 @@ Keep plans self-contained and focused on observable user behavior. Maintain
 expected results, and the reasoning behind decisions. Follow the formatting and
 revision requirements in `PLANS.md`.
 
-Once implementation is authorized, proceed through the plan's milestones and
-keep the plan current rather than stopping to request permission for each step.
+Follow the owner's current cadence: complete one bounded step, self-review it,
+run the relevant checks, and update the living plan with evidence and remaining
+work. Then stop and ask the owner to continue. This explicit instruction takes
+precedence over PLANS.md's default of proceeding without pauses. Do not request
+confirmation for routine actions within the authorized step.
 
 ## Architecture and reliability
 

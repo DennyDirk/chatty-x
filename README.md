@@ -127,7 +127,14 @@ docker compose -f compose.tdlib-test.yaml run --build --rm tdlib-check
 при `WORKERS_ENABLED=false`. Порядок проверки очереди, включения обработчиков и
 отдельной настройки автоответов — [docs/telegram-sending.md](docs/telegram-sending.md).
 
-## Структура
+## Локальная модель
+
+Локальная модель для текстовых ответов и памяти без OpenAI-кредитов:
+[настройка Ollama / Qwen3 8B](docs/ollama.md). Выбор находится в общих настройках
+на вкладке «Автоматизация». Для действующего стенда на 8089 сначала требуется
+пересборка backend/web; простой refresh браузера не применяет новый backend.
+
+## Структура репозитория
 
 `backend/` — Java/Spring и миграции Flyway; `frontend/` — React/TypeScript;
 `infra/` — контейнеры и эксплуатация; `docs/` — свидетельства проверок.

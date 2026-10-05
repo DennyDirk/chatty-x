@@ -2,8 +2,8 @@ package app.chattyx.delivery;
 
 import app.chattyx.connections.*;
 import app.chattyx.conversations.ConversationService;
-import app.chattyx.personas.SettingsService;
 import app.chattyx.operations.BudgetService;
+import app.chattyx.personas.SettingsService;
 import app.chattyx.shared.*;
 import java.sql.Timestamp;
 import java.time.*;
@@ -129,7 +129,11 @@ public class DeliveryService {
         "SELECT c.*,n.status AS connection_status,n.enabled AS connection_enabled FROM conversation c JOIN connection n ON n.id=c.connection_id WHERE c.id=? FOR UPDATE OF c",
         chat
       );
-      var rows = db.list("SELECT * FROM outbound WHERE id=? AND status='READY' AND due_at<=? FOR UPDATE", id, Timestamp.from(clock.instant()));
+      var rows = db.list(
+        "SELECT * FROM outbound WHERE id=? AND status='READY' AND due_at<=? FOR UPDATE",
+        id,
+        Timestamp.from(clock.instant())
+      );
       if (rows.isEmpty()) return null;
       var out = rows.getFirst();
       boolean auto = out.get("source").equals("AUTOMATION");
@@ -148,7 +152,18 @@ public class DeliveryService {
         return null;
       }
       if (!c.get("connectionStatus").equals("READY")) return null;
-      if(auto && budget.used().compareTo(new java.math.BigDecimal(settings.read("global").path("monthlyBudgetUsd").asText("30")))>0){chats.attention(chat,"BUDGET_EXHAUSTED");return null;}
+      if (
+        auto &&
+        !settings.localModel() &&
+        budget
+          .used()
+          .compareTo(
+            new java.math.BigDecimal(settings.read("global").path("monthlyBudgetUsd").asText("30"))
+          ) >= 0
+      ) {
+        chats.attention(chat, "BUDGET_EXHAUSTED");
+        return null;
+      }
       if (auto && !settings.allowedNow(settings.effective(chat), clock.instant())) return null;
       int sendingId = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
       db.jdbc.update(
@@ -178,15 +193,23 @@ public class DeliveryService {
         );
       tx.executeWithoutResult(s -> {
         db.one("SELECT id FROM conversation WHERE id=? FOR UPDATE", chat);
+        String previous = db.jdbc.queryForObject("SELECT status FROM outbound WHERE id=?", String.class, id);
+        String next = receipt.confirmed()
+          ? "SENT"
+          : previous.equals("SENT") || previous.equals("FAILED")
+            ? previous
+            : "SUBMITTED";
         db.jdbc.update(
-          "UPDATE outbound SET temporary_id=?,external_id=COALESCE(external_id,?),status=CASE WHEN status IN ('SENT','FAILED') THEN status ELSE ? END,updated_at=? WHERE id=?",
+          "UPDATE outbound SET temporary_id=?,external_id=CASE WHEN ? THEN ? ELSE COALESCE(external_id,?) END,status=?,updated_at=? WHERE id=?",
           receipt.temporaryId(),
+          receipt.confirmed(),
           receipt.finalId(),
-          receipt.confirmed() ? "SENT" : "SUBMITTED",
+          receipt.finalId(),
+          next,
           Timestamp.from(clock.instant()),
           id
         );
-        if (receipt.confirmed()) recordSent(id, receipt.finalId());
+        if (receipt.confirmed() && !previous.equals("SENT")) recordSent(id, receipt.finalId());
         for (var pending : db.list(
           "SELECT * FROM delivery_receipt WHERE connection_id=? AND chat_id=? AND temporary_id=?",
           connection,
@@ -214,45 +237,50 @@ public class DeliveryService {
           id
         );
         else {
-          db.jdbc.update(
+          int changed = db.jdbc.update(
             "UPDATE outbound SET status='FAILED',reason='TELEGRAM_RATE_LIMIT' WHERE id=? AND status='SENDING'",
             id
           );
-          chats.attention(chat, "TELEGRAM_RATE_LIMIT");
+          if (changed > 0) chats.attention(chat, "TELEGRAM_RATE_LIMIT");
         }
       });
     } catch (ApiException e) {
-      if (e.code().equals("TELEGRAM_REQUEST_REJECTED")) {
-        db.jdbc.update(
-          "UPDATE outbound SET status='FAILED',reason=? WHERE id=? AND status<>'SENT'",
-          e.code(),
-          id
-        );
-      } else if (e.code().equals("TELEGRAM_RATE_LIMIT")) {
-        // Do not invent a FloodWait duration; require explicit recovery until adapter provides it.
-        db.jdbc.update(
-          "UPDATE outbound SET status='FAILED',reason='TELEGRAM_RATE_LIMIT' WHERE id=? AND status<>'SENT'",
-          id
-        );
-      } else db.jdbc.update(
-        "UPDATE outbound SET status='UNKNOWN',reason='DELIVERY_UNCONFIRMED' WHERE id=? AND status<>'SENT'",
-        id
-      );
-      tx.executeWithoutResult(s -> chats.attention(chat, "DELIVERY_REQUIRES_REVIEW"));
+      boolean rejected =
+        e.code().equals("TELEGRAM_REQUEST_REJECTED") || e.code().equals("TELEGRAM_RATE_LIMIT");
+      // A rate-limit error without a server deadline is not safe to retry automatically.
+      recordFailure(id, chat, rejected ? "FAILED" : "UNKNOWN", rejected ? e.code() : "DELIVERY_UNCONFIRMED");
     } catch (Exception e) {
-      db.jdbc.update(
-        "UPDATE outbound SET status='UNKNOWN',reason='DELIVERY_UNCONFIRMED' WHERE id=? AND status<>'SENT'",
-        id
-      );
-      tx.executeWithoutResult(s -> chats.attention(chat, "DELIVERY_REQUIRES_REVIEW"));
+      recordFailure(id, chat, "UNKNOWN", "DELIVERY_UNCONFIRMED");
     }
     events.changed();
   }
 
+  private void recordFailure(UUID id, UUID chat, String status, String reason) {
+    tx.executeWithoutResult(s -> {
+      db.one("SELECT id FROM conversation WHERE id=? FOR UPDATE", chat);
+      int changed = db.jdbc.update(
+        "UPDATE outbound SET status=?,reason=?,updated_at=? WHERE id=? AND status IN ('SENDING','SUBMITTED','UNKNOWN')",
+        status,
+        reason,
+        Timestamp.from(clock.instant()),
+        id
+      );
+      if (changed > 0) chats.attention(chat, "DELIVERY_REQUIRES_REVIEW");
+    });
+  }
+
   public void confirmation(MessagingAdapter.Delivered result) {
     tx.executeWithoutResult(s -> {
+      // Use the same lock order as send(): conversation, then delivery receipt.
+      var conversations = db.list(
+        "SELECT id FROM conversation WHERE connection_id=? AND external_id=? FOR UPDATE",
+        result.connectionId(),
+        result.chatId()
+      );
+      if (conversations.isEmpty()) return;
+      UUID chat = UUID.fromString(conversations.getFirst().get("id").toString());
       db.jdbc.update(
-        "INSERT INTO delivery_receipt(connection_id,chat_id,temporary_id,message_id,success,category) VALUES (?,?,?,?,?,?) ON CONFLICT(connection_id,chat_id,temporary_id) DO UPDATE SET message_id=excluded.message_id,success=excluded.success,category=excluded.category",
+        "INSERT INTO delivery_receipt(connection_id,chat_id,temporary_id,message_id,success,category) VALUES (?,?,?,?,?,?) ON CONFLICT(connection_id,chat_id,temporary_id) DO UPDATE SET message_id=excluded.message_id,success=excluded.success,category=excluded.category WHERE NOT delivery_receipt.success AND excluded.success",
         result.connectionId(),
         result.chatId(),
         result.temporaryId(),
@@ -260,26 +288,39 @@ public class DeliveryService {
         result.success(),
         result.category()
       );
-      var rows = db.list(
-        "SELECT o.id,o.conversation_id FROM outbound o JOIN conversation c ON c.id=o.conversation_id WHERE c.connection_id=? AND c.external_id=? AND (o.temporary_id=? OR o.external_id=?)",
+      var receipt = db.one(
+        "SELECT * FROM delivery_receipt WHERE connection_id=? AND chat_id=? AND temporary_id=?",
         result.connectionId(),
         result.chatId(),
+        result.temporaryId()
+      );
+      boolean success = Boolean.TRUE.equals(receipt.get("success"));
+      String messageId = receipt.get("messageId").toString();
+      String category = receipt.get("category").toString();
+      var rows = db.list(
+        "SELECT id,status FROM outbound WHERE conversation_id=? AND (temporary_id=? OR external_id=?)",
+        chat,
         result.temporaryId(),
-        result.messageId()
+        messageId
       );
       for (var row : rows) {
-        UUID id = UUID.fromString(row.get("id").toString()),
-          chat = UUID.fromString(row.get("conversationId").toString());
-        db.one("SELECT id FROM conversation WHERE id=? FOR UPDATE", chat);
-        db.jdbc.update(
-          "UPDATE outbound SET status=?,external_id=?,reason=?,updated_at=now() WHERE id=?",
-          result.success() ? "SENT" : "FAILED",
-          result.messageId(),
-          result.category(),
-          id
-        );
-        if (result.success()) recordSent(id, result.messageId());
-        else chats.attention(chat, result.category());
+        UUID id = UUID.fromString(row.get("id").toString());
+        String previous = row.get("status").toString();
+        if (
+          (success && !previous.equals("SENT")) ||
+          (!success && Set.of("SENDING", "SUBMITTED", "UNKNOWN").contains(previous))
+        ) {
+          db.jdbc.update(
+            "UPDATE outbound SET status=?,external_id=?,reason=?,updated_at=? WHERE id=?",
+            success ? "SENT" : "FAILED",
+            messageId,
+            category,
+            Timestamp.from(clock.instant()),
+            id
+          );
+          if (success) recordSent(id, messageId);
+          else chats.attention(chat, category);
+        }
         db.jdbc.update(
           "DELETE FROM delivery_receipt WHERE connection_id=? AND chat_id=? AND temporary_id=?",
           result.connectionId(),
@@ -311,7 +352,8 @@ public class DeliveryService {
       Timestamp.from(clock.instant())
     );
     db.jdbc.update(
-      "UPDATE conversation SET status=CASE WHEN mode='AUTO' THEN 'IDLE' ELSE 'PAUSED' END,last_activity=? WHERE id=?",
+      "UPDATE conversation SET status=CASE WHEN version=? AND status='READY' THEN CASE WHEN mode='AUTO' THEN 'IDLE' ELSE 'PAUSED' END ELSE status END,last_activity=GREATEST(last_activity,?) WHERE id=?",
+      out.get("contextVersion"),
       Timestamp.from(clock.instant()),
       chat
     );

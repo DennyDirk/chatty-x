@@ -54,8 +54,9 @@ public class MemoryWorker {
             } catch (Exception error) {
               String category = error instanceof ApiException api ? api.code() : "MEMORY_UNAVAILABLE";
               db.jdbc.update(
-                "UPDATE memory_job SET attempts=attempts+1,error_category=?,due_at=now()+interval '1 hour' WHERE conversation_id=?",
+                "UPDATE memory_job SET attempts=attempts+1,error_category=?,due_at=now()+(? * interval '1 second') WHERE conversation_id=?",
                 category,
+                category.equals("MODEL_BUSY") ? 5 : 3600,
                 chat
               );
             }

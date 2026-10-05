@@ -30,6 +30,7 @@ chatty:
   telegram-api-id: ${TELEGRAM_API_ID:0}
   telegram-api-hash: ${TELEGRAM_API_HASH:}
   workers-enabled: ${WORKERS_ENABLED:true}
+  ollama-chat-url: ${OLLAMA_CHAT_URL:http://localhost:11434/api/chat}
 logging:
   level:
     root: INFO

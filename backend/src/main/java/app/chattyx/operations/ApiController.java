@@ -273,7 +273,8 @@ public class ApiController {
     return Map.of(
       "workersEnabled", delivery.enabled(),
       "automationEnabled", settings.read("global").path("enabled").asBoolean(),
-      "modelConfigured", settings.credential("openai").isPresent(),
+      "modelConfigured", settings.modelConfigured(),
+      "modelProvider", settings.localModel() ? "ollama" : "openai",
       "demo", demo
     );
   }

@@ -24,8 +24,30 @@ function Form({ scope, data, compact }: { scope: string; data: Settings; compact
     [tab, setTab] = useState("style");
   const cache = useQueryClient();
   const inherited = scope !== "global";
-  const value=(name:string)=>body[name]??data.effective?.[name];
-  const source=(name:string)=>inherited?<small>{Object.hasOwn(body,name)?'Своя настройка':`Из ${data.sources?.[name]==='connection'?'аккаунта':'общих настроек'}`}{Object.hasOwn(body,name)&&<button type="button" className="inherit-reset" onClick={()=>setBody(previous=>{const next={...previous};delete next[name];return next;})}>Наследовать</button>}</small>:null;
+  const value = (name: string) => body[name] ?? data.effective?.[name];
+  const source = (name: string) =>
+    inherited ? (
+      <small>
+        {Object.hasOwn(body, name)
+          ? "Своя настройка"
+          : `Из ${data.sources?.[name] === "connection" ? "аккаунта" : "общих настроек"}`}
+        {Object.hasOwn(body, name) && (
+          <button
+            type="button"
+            className="inherit-reset"
+            onClick={() =>
+              setBody((previous) => {
+                const next = { ...previous };
+                delete next[name];
+                return next;
+              })
+            }
+          >
+            Наследовать
+          </button>
+        )}
+      </small>
+    ) : null;
   const set = (name: string, value: SettingValue) => {
     setBody((v) => ({ ...v, [name]: value }));
     setSaved(false);
@@ -150,7 +172,10 @@ function Form({ scope, data, compact }: { scope: string; data: Settings; compact
             ["money", "Деньги"],
             ["personal", "Личные решения"],
           ].map(([key, label]) => {
-            const rules = {...((data.effective?.commitments??{}) as Record<string,{mode:string;rule:string}>),...((body.commitments??{}) as Record<string,{mode:string;rule:string}>)};
+            const rules = {
+              ...((data.effective?.commitments ?? {}) as Record<string, { mode: string; rule: string }>),
+              ...((body.commitments ?? {}) as Record<string, { mode: string; rule: string }>),
+            };
             const rule = rules[key] ?? { mode: "DRAFT", rule: "" };
             return (
               <section className="rule-card" key={key}>
@@ -192,19 +217,38 @@ function Form({ scope, data, compact }: { scope: string; data: Settings; compact
           {!inherited && (
             <>
               <div className="section-caption">МОДЕЛИ И ХРАНЕНИЕ</div>
-              {number("monthlyBudgetUsd", "Месячный бюджет, USD", 0, 10000)}
-              {number("messageRetentionDays", "Хранить сообщения, дней", 1, 3650)}
-              {number("fileRetentionDays", "Хранить вложения, дней", 1, 3650)}
               <label>
-                Модель ответов
+                Провайдер ответов и памяти
                 <select
-                  value={String(body.replyModel ?? "gpt-5.4")}
-                  onChange={(e) => set("replyModel", e.target.value)}
+                  value={String(body.modelProvider ?? "openai")}
+                  onChange={(e) => set("modelProvider", e.target.value)}
                 >
-                  <option value="gpt-5.4">GPT-5.4</option>
-                  <option value="gpt-5.4-mini">GPT-5.4 mini</option>
+                  <option value="openai">OpenAI — облачный API</option>
+                  <option value="ollama">Ollama — на моём компьютере</option>
                 </select>
               </label>
+              {body.modelProvider === "ollama" && (
+                <p className="notice">
+                  Qwen3 8B отвечает и обновляет память локально, без API-ключа и оплаты запросов. Ollama
+                  должна работать на компьютере сервера. Запросы выполняются по одному. Фото и голосовые
+                  потребуют вашего ответа. После сохранения проверьте модель в «Площадке».
+                </p>
+              )}
+              {number("monthlyBudgetUsd", "Месячный бюджет облачного API, USD", 0, 10000)}
+              {number("messageRetentionDays", "Хранить сообщения, дней", 1, 3650)}
+              {number("fileRetentionDays", "Хранить вложения, дней", 1, 3650)}
+              {body.modelProvider !== "ollama" && (
+                <label>
+                  Модель ответов
+                  <select
+                    value={String(body.replyModel ?? "gpt-5.4")}
+                    onChange={(e) => set("replyModel", e.target.value)}
+                  >
+                    <option value="gpt-5.4">GPT-5.4</option>
+                    <option value="gpt-5.4-mini">GPT-5.4 mini</option>
+                  </select>
+                </label>
+              )}
               <label className="check">
                 <input
                   type="checkbox"

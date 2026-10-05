@@ -30,6 +30,7 @@ export interface RuntimeStatus {
   workersEnabled: boolean;
   automationEnabled: boolean;
   modelConfigured: boolean;
+  modelProvider: "openai" | "ollama";
   demo: boolean;
 }
 export interface Message {

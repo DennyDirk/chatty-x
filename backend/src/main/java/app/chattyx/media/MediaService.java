@@ -43,6 +43,9 @@ public class MediaService {
   }
 
   public void prepare(UUID chat) {
+    if (settings.localModel() && db.jdbc.queryForObject(
+        "SELECT count(*) FROM message WHERE conversation_id=? AND NOT handled AND NOT deleted AND kind<>'TEXT'",
+        Integer.class, chat) > 0) throw new ApiException(409, "LOCAL_MEDIA_UNSUPPORTED");
     long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
     for (var a : db.list(
       "SELECT a.*,m.conversation_id,c.connection_id FROM attachment a JOIN message m ON m.id=a.message_id JOIN conversation c ON c.id=m.conversation_id WHERE m.conversation_id=? AND NOT m.handled AND NOT m.deleted AND a.status NOT IN ('READY','HISTORICAL')",
@@ -121,6 +124,7 @@ public class MediaService {
   }
 
   private String transcribe(UUID chat, Path source, int duration) throws Exception {
+    if (settings.localModel()) throw new ApiException(409, "LOCAL_MEDIA_UNSUPPORTED");
     if (demo) return "Тестовая расшифровка голосового сообщения";
     String key = settings.credential("openai").orElseThrow(() -> new ApiException(409, "MODEL_KEY_REQUIRED"));
     Path converted = root.resolve(UUID.randomUUID() + ".wav");

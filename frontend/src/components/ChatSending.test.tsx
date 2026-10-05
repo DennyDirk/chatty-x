@@ -39,6 +39,7 @@ const runtime: RuntimeStatus = {
   workersEnabled: true,
   automationEnabled: false,
   modelConfigured: false,
+  modelProvider: "openai",
   demo: false,
 };
 function mount(state = runtime, queued = false) {

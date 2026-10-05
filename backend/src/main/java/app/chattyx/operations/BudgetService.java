@@ -71,6 +71,13 @@ public class BudgetService {
     );
   }
 
+  public void recordLocal(UUID conversation, String kind, String model, String prompt, long input, long output) {
+    db.jdbc.update(
+      "INSERT INTO usage_entry(id,conversation_id,kind,model,prompt_version,state,reserved_usd,actual_usd,input_tokens,output_tokens,created_at,completed_at) VALUES (?,?,?,?,?,'COMPLETED',0,0,?,?,?,?)",
+      UUID.randomUUID(), conversation, kind, "ollama/" + model, prompt, input, output,
+      Timestamp.from(clock.instant()), Timestamp.from(clock.instant()));
+  }
+
   public void unknown(UUID id) {
     db.jdbc.update("UPDATE usage_entry SET state='UNKNOWN' WHERE id=? AND state='RESERVED'", id);
   }

@@ -77,6 +77,7 @@ class WorkflowIT {
         db.jdbc.execute("TRUNCATE connection, usage_entry, audit_event CASCADE");
         db.jdbc.update("DELETE FROM app_settings WHERE scope<>'global'");
         db.jdbc.update("UPDATE app_settings SET body=jsonb_set(jsonb_set(body,'{enabled}','true'),'{monthlyBudgetUsd}','30') WHERE scope='global'");
+        db.jdbc.update("UPDATE app_settings SET body=jsonb_set(body,'{modelProvider}','\"openai\"') WHERE scope='global'");
         connection = connections.create("Synthetic account", "fake");
         connections.authorize(connection, "test");
         connections.enable(connection, true);
@@ -93,6 +94,69 @@ class WorkflowIT {
         return db.jdbc.queryForObject("SELECT id FROM outbound WHERE conversation_id=? AND status='READY'", UUID.class, chat);
     }
     String status(UUID id) { return db.jdbc.queryForObject("SELECT status FROM outbound WHERE id=?",String.class,id); }
+
+    void localProvider() {
+        long version=((Number)settings.view("global").get("version")).longValue();
+        settings.save("global",version,Map.of("modelProvider","ollama","monthlyBudgetUsd",0));
+    }
+    @Test void memoryContractStoresValidatedLocalFactWithSource() {
+        localProvider();receive("local-memory");
+        UUID source=db.jdbc.queryForObject("SELECT id FROM message WHERE conversation_id=?",UUID.class,chat);
+        app.chattyx.generation.StructuredModel local=(id,kind,name,prompt,instructions,data,images,schema)->{
+            assertThat(kind).isEqualTo("memory");assertThat(prompt).isEqualTo("memory-v2");
+            assertThat(schema.path("properties").path("facts").path("items").path("properties").path("subject").path("enum")).hasSize(2);
+            var fact=Json.object().put("subject","contact").put("key","city").put("content","Lives in York");
+            fact.set("sourceIds",Json.MAPPER.createArrayNode().add(source.toString()));
+            return Json.object().put("summary","Contact lives in York").set("facts",Json.MAPPER.createArrayNode().add(fact));
+        };
+        var productionMemory=new MemoryService(db,local,settings,chats,transactions,"production");
+        assertThat(productionMemory.refresh(chat)).isTrue();
+        assertThat(productionMemory.list(chat)).hasSize(1);
+        assertThat(productionMemory.list(chat).getFirst()).containsEntry("subject","contact").containsEntry("content","Lives in York");
+        assertThat(db.jdbc.queryForObject("SELECT message_id FROM fact_source",UUID.class)).isEqualTo(source);
+    }
+    @Test void localReplyIsDeliveredWithZeroCloudBudgetAndWithoutKey() {
+        localProvider();db.jdbc.update("DELETE FROM credential WHERE name='openai'");
+        assertThat(settings.modelConfigured()).isTrue();
+        UUID out=preparedReply();clock.advance(6);delivery.send(out,chat);
+        assertThat(status(out)).isEqualTo("SENT");
+        budget.recordLocal(chat,"reply","qwen3:8b","reply-v1",100,20);
+        assertThat(budget.used()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(db.one("SELECT model,state,actual_usd FROM usage_entry"))
+            .containsEntry("model","ollama/qwen3:8b").containsEntry("state","COMPLETED");
+    }
+    @Test void providerSwitchCancelsOldReplyAndDisallowsPerChatOverride() {
+        UUID out=preparedReply();Object version=chats.get(chat).get("version");
+        localProvider();
+        assertThat(status(out)).isEqualTo("CANCELLED");
+        assertThat(((Number)chats.get(chat).get("version")).longValue()).isGreaterThan(((Number)version).longValue());
+        assertThatThrownBy(()->settings.save("conversation:"+chat,0,Map.of("modelProvider","openai")))
+            .isInstanceOfSatisfying(ApiException.class,e->assertThat(e.code()).isEqualTo("GLOBAL_SETTING_ONLY"));
+        assertThatThrownBy(()->settings.save("global",0,Map.of("modelProvider","unknown")))
+            .isInstanceOfSatisfying(ApiException.class,e->assertThat(e.code()).isEqualTo("INVALID_MODEL_PROVIDER"));
+    }
+    @Test void busyModelKeepsDurableJobAndRetriesWithoutPausingOrDroppingInput() {
+        localProvider();receive("busy");clock.advance(8);
+        when(model.generate(any())).thenThrow(new ApiException(409,"MODEL_BUSY"))
+            .thenReturn(new ReplyModel.Reply("reply","got it","REPLY"));
+        worker.runOne(chat);
+        assertThat(chats.get(chat)).containsEntry("mode","AUTO").containsEntry("status","WAITING");
+        assertThat(db.one("SELECT state,lease_token FROM automation_job WHERE conversation_id=?",chat))
+            .containsEntry("state","WAITING").containsEntry("leaseToken",null);
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM outbound",Integer.class)).isZero();
+        clock.advance(3);worker.runOne(chat);
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM outbound WHERE status='READY'",Integer.class)).isEqualTo(1);
+    }
+    @Test void localAttachmentRequiresOwnerWithoutCallingReplyModel() {
+        localProvider();receive("photo");
+        db.jdbc.update("UPDATE message SET kind='PHOTO' WHERE conversation_id=?",chat);
+        clock.advance(8);worker.runOne(chat);
+        assertThat(chats.get(chat)).containsEntry("mode","PAUSED").containsEntry("needsAttention","LOCAL_MEDIA_UNSUPPORTED");
+        verifyNoInteractions(model);
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM usage_entry",Integer.class)).isZero();
+        var manual=delivery.manual(chat,"I will check it myself","local-media-manual");delivery.tick();
+        assertThat(status(UUID.fromString(manual.get("id").toString()))).isEqualTo("SENT");
+    }
 
     @Test void disabledProcessingRejectsNewManualReplyWithoutChangingConversation() {
         var before=chats.get(chat);
@@ -241,6 +305,81 @@ class WorkflowIT {
         assertThat(status(out)).isEqualTo("SENT");
         assertThat(db.jdbc.queryForObject("SELECT count(*) FROM delivery_receipt",Integer.class)).isZero();
         assertThat(db.jdbc.queryForObject("SELECT external_id FROM message WHERE direction='OUT'",String.class)).isEqualTo("final-early");
+    }
+    @Test void duplicateConfirmationDoesNotOverwriteNewConversationActivity() {
+        UUID out=preparedReply();clock.advance(6);delivery.send(out,chat);
+        var sent=db.one("SELECT * FROM outbound WHERE id=?",out);
+        long memoryRevision=db.jdbc.queryForObject("SELECT revision FROM memory_job WHERE conversation_id=?",Long.class,chat);
+        clock.advance(10);receive("next-burst");var before=chats.get(chat);
+        clock.advance(10);
+        delivery.confirmation(new MessagingAdapter.Delivered(connection,"1001",sent.get("temporaryId").toString(),sent.get("externalId").toString(),true,"CONFIRMED"));
+        assertThat(chats.get(chat)).containsEntry("status","WAITING").containsEntry("lastActivity",before.get("lastActivity"));
+        assertThat(db.jdbc.queryForObject("SELECT revision FROM memory_job WHERE conversation_id=?",Long.class,chat)).isEqualTo(memoryRevision);
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM message WHERE direction='OUT'",Integer.class)).isEqualTo(1);
+    }
+    @Test void lateFailureCannotDemoteConfirmedDeliveryOrPauseChat() {
+        UUID out=preparedReply();clock.advance(6);delivery.send(out,chat);
+        var sent=db.one("SELECT * FROM outbound WHERE id=?",out);
+        delivery.confirmation(new MessagingAdapter.Delivered(connection,"1001",sent.get("temporaryId").toString(),"late-failure",false,"FAILED"));
+        assertThat(status(out)).isEqualTo("SENT");
+        assertThat(db.one("SELECT external_id FROM outbound WHERE id=?",out).get("externalId")).isEqualTo(sent.get("externalId"));
+        assertThat(chats.get(chat)).containsEntry("mode","AUTO").containsEntry("status","IDLE");
+    }
+    @Test void firstConfirmationKeepsNewBurstWaiting() {
+        UUID out=preparedReply();clock.advance(6);
+        doReturn(new MessagingAdapter.Receipt("pending-first",null,false)).when(fake).sendText(any());
+        delivery.send(out,chat);assertThat(status(out)).isEqualTo("SUBMITTED");
+        receive("next-while-sending");long version=((Number)chats.get(chat).get("version")).longValue();
+        delivery.confirmation(new MessagingAdapter.Delivered(connection,"1001","pending-first","final-first",true,"CONFIRMED"));
+        assertThat(status(out)).isEqualTo("SENT");
+        assertThat(chats.get(chat)).containsEntry("status","WAITING").containsEntry("version",version);
+        assertThat(db.jdbc.queryForObject("SELECT state FROM automation_job WHERE conversation_id=?",String.class,chat)).isEqualTo("WAITING");
+        clock.advance(8);worker.runOne(chat);verify(model,times(2)).generate(any());
+    }
+    @Test void earlySuccessIsNotLostWhenFailureArrivesBeforeSendReceipt() {
+        UUID out=preparedReply();clock.advance(6);
+        doAnswer(invocation->{
+            delivery.confirmation(new MessagingAdapter.Delivered(connection,"1001","early-conflict","final-success",true,"CONFIRMED"));
+            delivery.confirmation(new MessagingAdapter.Delivered(connection,"1001","early-conflict","early-conflict",false,"FAILED"));
+            return new MessagingAdapter.Receipt("early-conflict",null,false);
+        }).when(fake).sendText(any());
+        delivery.send(out,chat);
+        assertThat(status(out)).isEqualTo("SENT");
+        assertThat(db.jdbc.queryForObject("SELECT external_id FROM message WHERE direction='OUT'",String.class)).isEqualTo("final-success");
+        assertThat(chats.get(chat).get("mode")).isEqualTo("AUTO");
+    }
+    @Test void inFlightConfirmationDoesNotResumeManualTakeover() {
+        UUID out=preparedReply();clock.advance(6);
+        doAnswer(invocation->{
+            delivery.manual(chat,"Отвечаю сам","takeover-during-send");
+            return new MessagingAdapter.Receipt("in-flight","in-flight",true);
+        }).when(fake).sendText(any());
+        delivery.send(out,chat);
+        assertThat(status(out)).isEqualTo("SENT");
+        assertThat(chats.get(chat)).containsEntry("mode","PAUSED").containsEntry("status","PAUSED").containsEntry("needsAttention","MANUAL_TAKEOVER");
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM outbound WHERE source='WEB_OWNER' AND status='READY'",Integer.class)).isEqualTo(1);
+    }
+    @Test void confirmedEventWinsOverLaterAdapterException() {
+        UUID out=preparedReply();clock.advance(6);
+        doAnswer(invocation->{
+            MessagingAdapter.Outgoing request=invocation.getArgument(0);
+            chats.receive(new MessagingAdapter.Incoming(connection,"1001","owned-temp","О, здорово 🙂",clock.instant(),true,false,false,null,null,request.sendingId()));
+            delivery.confirmation(new MessagingAdapter.Delivered(connection,"1001","owned-temp","owned-final",true,"CONFIRMED"));
+            throw new ApiException(504,"TELEGRAM_RESULT_UNKNOWN");
+        }).when(fake).sendText(any());
+        delivery.send(out,chat);
+        assertThat(status(out)).isEqualTo("SENT");
+        assertThat(chats.get(chat)).containsEntry("mode","AUTO").containsEntry("status","IDLE");
+        assertThat(db.jdbc.queryForObject("SELECT count(*) FROM message WHERE direction='OUT'",Integer.class)).isEqualTo(1);
+    }
+    @Test void exactBudgetLimitBlocksPreparedAutomationButAllowsOwnerReply() {
+        UUID out=preparedReply();clock.advance(6);
+        budget.reserve(chat,"reply","test","v1",new BigDecimal("30"));
+        delivery.send(out,chat);
+        verify(fake,never()).sendText(any());assertThat(status(out)).isEqualTo("CANCELLED");
+        assertThat(chats.get(chat)).containsEntry("mode","PAUSED").containsEntry("needsAttention","BUDGET_EXHAUSTED");
+        UUID manual=UUID.fromString(delivery.manual(chat,"Отвечу сам","budget-manual").get("id").toString());
+        delivery.send(manual,chat);assertThat(status(manual)).isEqualTo("SENT");
     }
     @Test void ambiguousAdapterFailureIsNeverRetried() {
         UUID out=preparedReply();clock.advance(6);
